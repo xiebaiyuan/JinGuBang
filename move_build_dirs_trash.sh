@@ -1,6 +1,24 @@
 #!/bin/bash
 set -e  # 当命令出错时退出脚本
 # set -x  # 取消注释以启用调试模式
+RED='\033[0;31m'
+NC='\033[0m' # No Color
+LOG_FILE="./$(date +%Y%m%d_%H%M%S).log"
+# 记录日志
+log() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE"
+}
+# 格式化文件大小
+format_size() {
+    local size=$1
+    if [ $size -ge 1048576 ]; then
+        printf "${RED}%.2f GB${NC}" $(echo "scale=2; $size/1048576" | bc)
+    elif [ $size -ge 1024 ]; then
+        printf "%.2f MB" $(echo "scale=2; $size/1024" | bc)
+    else
+        echo "$size KB"
+    fi
+}
 
 # 检查是否安装了 trash 命令
 if ! command -v trash &> /dev/null; then
@@ -49,7 +67,7 @@ dir_sizes=()
 
 # 定义要匹配的目录模式
 # 默认模式
-default_patterns=('build' 'cmake-build-*')
+default_patterns=('build' 'cmake-build-*' 'build.lite.*' 'build.macos.*' 'tmp' 'CMakeFiles' )
 
 # 合并默认模式和额外模式
 all_patterns=("${default_patterns[@]}" "${extra_patterns[@]}")
@@ -98,15 +116,17 @@ for i in "${!dir_list[@]}"; do
     dir="${dir_list[$i]}"
     content="${dir_contents[$i]}"
     size="${dir_sizes[$i]}"
+    formatted_size=$(format_size $size)
     echo "目录：$dir"
-    echo "大小：$size KB"
+    echo -e "大小：$formatted_size"
     echo "内容："
     echo "$content" | awk '{print "  "$0}'
     echo "-------------------------------"
 done
 
+formatted_total_size=$(format_size $total_size)
 echo "总计将删除的目录数量：${#dir_list[@]}"
-echo "已处理目录的总体积：$total_size KB"
+echo -e "已处理目录的总体积：$formatted_total_size"
 echo "-------------------------------"
 
 # 显示实际将要执行的命令
@@ -129,10 +149,37 @@ if [ "$confirm" != "yes" ]; then
     exit 0
 fi
 
+# 开始记录日志
+log "开始删除操作"
+log "总计删除目录数量：${#dir_list[@]}"
+log "总体积：$(format_size $total_size)"
+
+# 记录将要删除的目录、其内容和大小
+for i in "${!dir_list[@]}"; do
+    dir="${dir_list[$i]}"
+    content="${dir_contents[$i]}"
+    size="${dir_sizes[$i]}"
+    formatted_size=$(format_size $size)
+    
+    log "准备删除目录：$dir"
+    log "大小：$formatted_size"
+    log "内容："
+    echo "$content" | while IFS= read -r line; do
+        log "  $line"
+    done
+    log "-------------------------------"
+done
+
 # 执行删除操作
 for dir in "${dir_list[@]}"; do
     echo "正在删除目录：$dir"
-    trash "$dir"
+    if trash "$dir"; then
+        log "成功删除目录：$dir ($(format_size ${dir_sizes[${dir_list[@]%%$dir*}]}))"
+    else
+        log "删除失败：$dir"
+    fi
 done
 
-echo "删除完成。"
+log "删除操作完成"
+
+echo "删除完成。日志已保存到 $LOG_FILE"
