@@ -67,7 +67,7 @@ dir_sizes=()
 
 # 定义要匹配的目录模式
 # 默认模式
-default_patterns=('build' 'cmake-build-*' 'build.lite.*' 'build.macos.*' 'tmp' 'CMakeFiles' )
+default_patterns=('build' 'cmake-build-*' 'build.lite.*' 'build.macos.*' 'build.opt' 'tmp' 'CMakeFiles' )
 
 # 合并默认模式和额外模式
 all_patterns=("${default_patterns[@]}" "${extra_patterns[@]}")
