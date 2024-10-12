@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -e  # 当命令出错时退出脚本
 
 # 颜色定义
@@ -93,7 +93,7 @@ fi
 
 # 默认模式
 default_dir_patterns=(
-    'build' 'cmake-build-*' 'build.lite.*' 'build.macos.*' 'build.opt' 'tmp' 'CMakeFiles'
+    'build' 'cmake-build-*' 'build.lite.*' 'build.mml.*' 'build.macos.*' 'build.opt' 'tmp' 'CMakeFiles'
     'node_modules' 'dist' '.cache' '.tmp' '.sass-cache' 'coverage'
     'target' 'obj' 'out' 'Debug' 'Release'
 )
@@ -110,12 +110,20 @@ all_file_patterns=("${default_file_patterns[@]}" "${file_patterns[@]}")
 process_items() {
     local dir_args=() file_args=() exclude_args=() whitelist_args=()
     for pattern in "${all_dir_patterns[@]}"; do
-        dir_args+=(-name "$pattern" -o)
+        if [[ $pattern == *"*"* ]]; then
+            dir_args+=(-path "*/$pattern" -o -path "*/$pattern/*" -o)
+        else
+            dir_args+=(-name "$pattern" -o)
+        fi
     done
     unset 'dir_args[${#dir_args[@]}-1]'
 
     for pattern in "${all_file_patterns[@]}"; do
-        file_args+=(-name "$pattern" -o)
+        if [[ $pattern == *"*"* ]]; then
+            file_args+=(-path "*/$pattern" -o)
+        else
+            file_args+=(-name "$pattern" -o)
+        fi
     done
     unset 'file_args[${#file_args[@]}-1]'
 
@@ -127,7 +135,7 @@ process_items() {
         whitelist_args+=(-not -path "*/$dir/*")
     done
 
-    find "$target_dir" \( \( -type d -o -type l \) \( "${dir_args[@]}" \) \) -o \( -type f \( "${file_args[@]}" \) \) "${exclude_args[@]}" "${whitelist_args[@]}" -print0
+    find "$target_dir" \( \( -type d \( "${dir_args[@]}" \) \) -o \( -type f \( \( "${dir_args[@]}" \) -o \( "${file_args[@]}" \) \) \) \) "${exclude_args[@]}" "${whitelist_args[@]}" -print0
 }
 
 # 显示项目完整信息，按父目录分组
@@ -170,16 +178,24 @@ show_grouped_items() {
 
 get_matching_pattern() {
     local item=$1
-    local name=$(basename "$item")
-    for pattern in "${all_dir_patterns[@]}" "${all_file_patterns[@]}"; do
-        if [[ "$name" == $pattern ]]; then
+    for pattern in "${all_dir_patterns[@]}"; do
+        if [[ $pattern == *"*"* ]]; then
+            if [[ $item == */$pattern || $item == */$pattern/* ]]; then
+                echo "$pattern"
+                return
+            fi
+        elif [[ $(basename "$item") == $pattern ]]; then
             echo "$pattern"
             return
         fi
     done
-    # 检查通配符模式
-    for pattern in "${all_dir_patterns[@]}" "${all_file_patterns[@]}"; do
-        if [[ "$name" == $pattern ]]; then
+    for pattern in "${all_file_patterns[@]}"; do
+        if [[ $pattern == *"*"* ]]; then
+            if [[ $item == */$pattern ]]; then
+                echo "$pattern"
+                return
+            fi
+        elif [[ $(basename "$item") == $pattern ]]; then
             echo "$pattern"
             return
         fi
