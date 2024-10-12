@@ -28,13 +28,15 @@ format_size() {
 }
 
 show_help() {
-    echo "用法：$0 目标目录 [选项] [额外的目录模式...]"
+    echo "用法：$0 目标目录 [选项] [额外的模式...]"
     echo "选项："
     echo "  --dry-run       模拟运行，不实际删除文件"
     echo "  --no-confirm    不需要确认直接删除"
     echo "  --help          显示此帮助信息"
-    echo "  --exclude       排除指定模式的目录"
-    echo "额外的目录模式会被添加到默认模式中"
+    echo "  --exclude       排除指定模式的目录或文件"
+    echo "  --file          包含文件匹配模式"
+    echo "  --whitelist-dir 添加白名单目录（认包括 .git 和 .mgit）"
+    echo "额外的模式会被添加到默认模式中"
 }
 
 # 检查 trash 命令
@@ -50,6 +52,8 @@ dry_run=false
 no_confirm=false
 extra_patterns=()
 exclude_patterns=()
+file_patterns=()
+whitelist_dirs=('.git' '.mgit' 'third-party')
 
 # 解析参数
 while [[ $# -gt 0 ]]; do
@@ -58,6 +62,11 @@ while [[ $# -gt 0 ]]; do
         --no-confirm) no_confirm=true; shift ;;
         --help) show_help; exit 0 ;;
         --exclude) exclude_patterns+=("$2"); shift 2 ;;
+        --file) file_patterns+=("$2"); shift 2 ;;
+        --whitelist-dir)
+            whitelist_dirs+=("$2")
+            shift 2
+            ;;
         -*) echo "未知选项: $1" >&2; show_help; exit 1 ;;
         *)
             if [ -z "$target_dir" ]; then
@@ -83,54 +92,105 @@ if [ ! -d "$target_dir" ]; then
 fi
 
 # 默认模式
-default_patterns=(
+default_dir_patterns=(
     'build' 'cmake-build-*' 'build.lite.*' 'build.macos.*' 'build.opt' 'tmp' 'CMakeFiles'
     'node_modules' 'dist' '.cache' '.tmp' '.sass-cache' 'coverage'
-    'target' 'bin' 'obj' 'out' 'Debug' 'Release'
-    '*.log'
+    'target' 'obj' 'out' 'Debug' 'Release'
+)
+
+default_file_patterns=(
+    '*.log' 'libpaddle_api_light_bundled.a'
 )
 
 # 合并模式
-all_patterns=("${default_patterns[@]}" "${extra_patterns[@]}")
+all_dir_patterns=("${default_dir_patterns[@]}" "${extra_patterns[@]}")
+all_file_patterns=("${default_file_patterns[@]}" "${file_patterns[@]}")
 
-# 处理目录
-process_dirs() {
-    local name_args=() exclude_args=()
-    for pattern in "${all_patterns[@]}"; do
-        name_args+=(-name "$pattern" -o)
+# 处理目录和文件
+process_items() {
+    local dir_args=() file_args=() exclude_args=() whitelist_args=()
+    for pattern in "${all_dir_patterns[@]}"; do
+        dir_args+=(-name "$pattern" -o)
     done
-    unset 'name_args[${#name_args[@]}-1]'
+    unset 'dir_args[${#dir_args[@]}-1]'
+
+    for pattern in "${all_file_patterns[@]}"; do
+        file_args+=(-name "$pattern" -o)
+    done
+    unset 'file_args[${#file_args[@]}-1]'
 
     for pattern in "${exclude_patterns[@]}"; do
-        exclude_args+=(-not -path "*/$pattern/*")
+        exclude_args+=(-not -path "*/$pattern/*" -and -not -name "$pattern")
     done
 
-    find "$target_dir" \( "${name_args[@]}" \) "${exclude_args[@]}" -type d -print0
+    for dir in "${whitelist_dirs[@]}"; do
+        whitelist_args+=(-not -path "*/$dir/*")
+    done
+
+    find "$target_dir" \( \( -type d \( "${dir_args[@]}" \) \) -o \( -type f \( "${file_args[@]}" \) \) \) "${exclude_args[@]}" "${whitelist_args[@]}" -print0
+}
+
+# 显示项目完整信息，按父目录分组
+show_grouped_items() {
+    local sorted_items=($(printf '%s\n' "${items[@]}" | sort))
+    local current_parent=""
+
+    for item in "${sorted_items[@]}"; do
+        local parent_dir=$(dirname "$item")
+        local name=$(basename "$item")
+        local size=$(du -sh "$item" | cut -f1)
+        local type=$(if [ -d "$item" ]; then echo "目录"; else echo "文件"; fi)
+        local pattern=$(get_matching_pattern "$item")
+
+        if [[ "$parent_dir" != "$current_parent" ]]; then
+            if [[ -n "$current_parent" ]]; then
+                echo "---"
+            fi
+            echo -e "${GREEN}${parent_dir}${NC}"
+            current_parent="$parent_dir"
+        fi
+
+        echo -e "  ${YELLOW}${name}${NC}"
+        echo -e "    类型: ${type}, 大小: ${size}, 匹配模式: ${pattern}"
+    done
+    echo "---"
+}
+
+get_matching_pattern() {
+    local item=$1
+    for pattern in "${all_dir_patterns[@]}" "${all_file_patterns[@]}"; do
+        if [[ "$(basename "$item")" == $pattern ]]; then
+            echo "$pattern"
+            return
+        fi
+    done
+    echo "未知模式"
 }
 
 # 主要处理逻辑
-echo -e "${YELLOW}警告：此脚本会删除匹配特定模式的目录。请确保您了解将要删除的内容。${NC}"
+echo -e "${YELLOW}警告：此脚本会删除匹配特定模式的目录和文件。请确保您了解将要删除的内容。${NC}"
+echo -e "${GREEN}白名单目录（不会被删除）：${NC}${whitelist_dirs[*]}"
+echo -e "${GREEN}要删除的目录模式：${NC}${all_dir_patterns[*]}"
+echo -e "${GREEN}要删除的文件模式：${NC}${all_file_patterns[*]}"
+echo "---"
 
 total_size=0
-dirs=()
-while IFS= read -r -d '' dir; do
-    dirs+=("$dir")
-done < <(process_dirs)
+items=()
+while IFS= read -r -d '' item; do
+    items+=("$item")
+done < <(process_items)
 
-if [ ${#dirs[@]} -eq 0 ]; then
-    echo -e "${YELLOW}未找到符合条件的目录。${NC}"
+if [ ${#items[@]} -eq 0 ]; then
+    echo -e "${YELLOW}未找到符合条件的目录或文件。${NC}"
     exit 0
 fi
 
-echo -e "${GREEN}以下目录将被删除：${NC}"
-for dir in "${dirs[@]}"; do
-    size=$(du -sk "$dir" | awk '{print $1}')
-    total_size=$((total_size + size))
-    formatted_size=$(format_size $size)
-    echo -e "${YELLOW}目录：${NC}$dir ${YELLOW}大小：${NC}$formatted_size"
-done
+echo -e "${GREEN}以下项目将被删除：${NC}"
+show_grouped_items
 
-echo -e "${GREEN}总计将删除的目录数量：${NC}${#dirs[@]}"
+total_size=$(du -sc "${items[@]}" | tail -n1 | cut -f1)
+
+echo -e "\n${GREEN}总计将删除的项目数量：${NC}${#items[@]}"
 echo -e "${GREEN}总体积：${NC}$(format_size $total_size)"
 
 if [ "$dry_run" = true ]; then
@@ -139,7 +199,7 @@ if [ "$dry_run" = true ]; then
 fi
 
 if [ "$no_confirm" = false ]; then
-    read -p "是否确认删除以上目录？输入 'yes' 确认：" confirm
+    read -p "是否确认删除以上项目？输入 'yes' 确认：" confirm
     if [ "$confirm" != "yes" ]; then
         echo -e "${YELLOW}操作已取消。${NC}"
         exit 0
@@ -147,12 +207,12 @@ if [ "$no_confirm" = false ]; then
 fi
 
 log "开始删除操作"
-for dir in "${dirs[@]}"; do
-    echo -e "${GREEN}正在删除目录：${NC}$dir"
-    if trash "$dir"; then
-        log "成功删除目录：$dir"
+for item in "${items[@]}"; do
+    echo -e "${GREEN}正在删除项目：${NC}$item"
+    if trash "$item"; then
+        log "成功删除项目：$item"
     else
-        log "删除失败：$dir"
+        log "删除失败：$item"
     fi
 done
 
