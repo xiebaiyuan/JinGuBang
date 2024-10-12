@@ -3,7 +3,7 @@ set -e  # 当命令出错时退出脚本
 # set -x  # 取消注释以启用调试模式
 RED='\033[0;31m'
 NC='\033[0m' # No Color
-LOG_FILE="./$(date +%Y%m%d_%H%M%S).log"
+LOG_FILE="/Users/xiebaiyuan/Downloads/clean_$(date +%Y%m%d_%H%M%S).log"
 # 记录日志
 log() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE"
