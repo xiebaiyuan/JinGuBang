@@ -35,7 +35,7 @@ show_help() {
     echo "  --help          显示此帮助信息"
     echo "  --exclude       排除指定模式的目录或文件"
     echo "  --file          包含文件匹配模式"
-    echo "  --whitelist-dir 添加白名单目录（认包括 .git 和 .mgit）"
+    echo "  --whitelist-dir 添加白名单目录（默认包括 .git 和 .mgit）"
     echo "额外的模式会被添加到默认模式中"
 }
 
@@ -69,7 +69,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         -*) echo "未知选项: $1" >&2; show_help; exit 1 ;;
         *)
-            if [ -z "$target_dir" ]; then
+            if [ -z "$target_dir" ]; then 
                 target_dir="$1"
             else
                 extra_patterns+=("$1")
@@ -127,19 +127,27 @@ process_items() {
         whitelist_args+=(-not -path "*/$dir/*")
     done
 
-    find "$target_dir" \( \( -type d \( "${dir_args[@]}" \) \) -o \( -type f \( "${file_args[@]}" \) \) \) "${exclude_args[@]}" "${whitelist_args[@]}" -print0
+    find "$target_dir" \( \( -type d -o -type l \) \( "${dir_args[@]}" \) \) -o \( -type f \( "${file_args[@]}" \) \) "${exclude_args[@]}" "${whitelist_args[@]}" -print0
 }
 
 # 显示项目完整信息，按父目录分组
 show_grouped_items() {
-    local sorted_items=($(printf '%s\n' "${items[@]}" | sort))
     local current_parent=""
 
-    for item in "${sorted_items[@]}"; do
+    while IFS= read -r -d '' item; do
         local parent_dir=$(dirname "$item")
         local name=$(basename "$item")
-        local size=$(du -sh "$item" | cut -f1)
-        local type=$(if [ -d "$item" ]; then echo "目录"; else echo "文件"; fi)
+        local size=$(du -sh "$item" 2>&1)
+        local type
+        if [ -d "$item" ]; then
+            type="目录"
+        elif [ -f "$item" ]; then
+            type="文件"
+        elif [ -L "$item" ]; then
+            type="符号链接"
+        else
+            type="未知类型"
+        fi
         local pattern=$(get_matching_pattern "$item")
 
         if [[ "$parent_dir" != "$current_parent" ]]; then
@@ -151,20 +159,32 @@ show_grouped_items() {
         fi
 
         echo -e "  ${YELLOW}${name}${NC}"
-        echo -e "    类型: ${type}, 大小: ${size}, 匹配模式: ${pattern}"
-    done
+        if [[ $size == *"No such file or directory"* ]]; then
+            echo -e "    类型: ${type}, 大小: 无法获取 (可能是无效的符号链接或已被删除), 匹配模式: ${pattern}"
+        else
+            echo -e "    类型: ${type}, 大小: ${size}, 匹配模式: ${pattern}"
+        fi
+    done < <(printf '%s\0' "${items[@]}" | sort -z)
     echo "---"
 }
 
 get_matching_pattern() {
     local item=$1
+    local name=$(basename "$item")
     for pattern in "${all_dir_patterns[@]}" "${all_file_patterns[@]}"; do
-        if [[ "$(basename "$item")" == $pattern ]]; then
+        if [[ "$name" == $pattern ]]; then
             echo "$pattern"
             return
         fi
     done
-    echo "未知模式"
+    # 检查通配符模式
+    for pattern in "${all_dir_patterns[@]}" "${all_file_patterns[@]}"; do
+        if [[ "$name" == $pattern ]]; then
+            echo "$pattern"
+            return
+        fi
+    done
+    echo "未匹配模式"
 }
 
 # 主要处理逻辑
@@ -174,7 +194,7 @@ echo -e "${GREEN}要删除的目录模式：${NC}${all_dir_patterns[*]}"
 echo -e "${GREEN}要删除的文件模式：${NC}${all_file_patterns[*]}"
 echo "---"
 
-total_size=0
+# 替换 mapfile 命令
 items=()
 while IFS= read -r -d '' item; do
     items+=("$item")
