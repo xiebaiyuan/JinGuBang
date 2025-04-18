@@ -445,6 +445,86 @@ class BuildDirCleaner:
         
         return total_size
 
+    def show_pre_delete_summary(self, total_size):
+        """显示删除前的汇总信息，帮助用户做出决定"""
+        print_color(Colors.BLUE, "\n======== 删除前汇总信息 ========")
+        print_color(Colors.YELLOW, "以下是将要删除的内容概览:")
+        
+        # 1. 目录统计 (按数量排序)
+        if self.dir_type_counts:
+            print_color(Colors.BLUE, "\n目录汇总:")
+            for pattern, count in sorted(self.dir_type_counts.items(), key=lambda x: x[1], reverse=True):
+                print(f"  {Colors.GREEN}{pattern}{Colors.NC}: {count} 个目录")
+            
+            # 列出前5个最大的目录
+            print_color(Colors.BLUE, "\n占用空间最大的目录 (前5个):")
+            top_dirs = []
+            for item in self.sorted_items:
+                if os.path.isdir(item) and os.path.exists(item):
+                    try:
+                        output = subprocess.check_output(['du', '-sk', item], stderr=subprocess.DEVNULL)
+                        size = int(output.split()[0])
+                        top_dirs.append((item, size))
+                    except:
+                        pass
+                        
+            # 按大小排序并显示前5个
+            for item, size in sorted(top_dirs, key=lambda x: x[1], reverse=True)[:5]:
+                if size >= 1048576:  # GB
+                    size_str = f"{size/1048576:.2f} GB"
+                elif size >= 1024:  # MB
+                    size_str = f"{size/1024:.2f} MB"
+                else:
+                    size_str = f"{size} KB"
+                print(f"  {Colors.YELLOW}{item}{Colors.NC}: {size_str}")
+        
+        # 2. 文件类型统计
+        if self.file_type_counts:
+            print_color(Colors.BLUE, "\n文件类型汇总:")
+            for pattern, count in sorted(self.file_type_counts.items(), key=lambda x: x[1], reverse=True):
+                print(f"  {Colors.GREEN}{pattern}{Colors.NC}: {count} 个文件")
+        
+        # 3. 路径分布统计
+        print_color(Colors.BLUE, "\n按路径分布:")
+        path_counts = defaultdict(int)
+        for item in self.sorted_items:
+            if os.path.exists(item):
+                # 获取前3级路径
+                parts = item.split(os.sep)
+                if len(parts) > 3:
+                    path_prefix = os.sep.join(parts[:3])
+                else:
+                    path_prefix = os.sep.join(parts[:-1])
+                path_counts[path_prefix] += 1
+        
+        # 显示主要路径分布
+        for path, count in sorted(path_counts.items(), key=lambda x: x[1], reverse=True)[:5]:
+            print(f"  {Colors.YELLOW}{path}{Colors.NC}: {count} 个项目")
+        
+        if len(path_counts) > 5:
+            print(f"  ... 等共 {len(path_counts)} 个路径")
+        
+        # 4. 总体统计
+        print_color(Colors.BLUE, "\n总体统计:")
+        print(f"  {Colors.GREEN}总项目数:{Colors.NC} {len(self.sorted_items)} 个")
+        print(f"  {Colors.GREEN}目录数量:{Colors.NC} {sum(self.dir_type_counts.values())} 个")
+        print(f"  {Colors.GREEN}文件数量:{Colors.NC} {sum(self.file_type_counts.values())} 个")
+        
+        # 显示总大小
+        if total_size >= 1048576:
+            print(f"  {Colors.GREEN}总体积:{Colors.NC} {total_size/1048576:.2f} GB")
+        elif total_size >= 1024:
+            print(f"  {Colors.GREEN}总体积:{Colors.NC} {total_size/1024:.2f} MB")
+        else:
+            print(f"  {Colors.GREEN}总体积:{Colors.NC} {total_size} KB")
+        
+        # 5. 提示查看方式
+        print_color(Colors.BLUE, "\n您可以采取以下操作:")
+        print(f"  1. 输入 'yes' 确认删除上述内容")
+        print(f"  2. 输入任意其他内容取消操作")
+        print(f"  3. 使用 --dry-run 参数重新运行脚本，仅查看不删除")
+        print(f"  4. 使用 --exclude 参数排除特定模式的文件或目录")
+
     def delete_items(self):
         """删除项目阶段"""
         print_color(Colors.BLUE, "开始执行删除操作...")
@@ -579,6 +659,9 @@ class BuildDirCleaner:
         
         # 计算总大小
         total_size = self.calculate_total_size()
+        
+        # 显示删除前的汇总信息
+        self.show_pre_delete_summary(total_size)
         
         # 显示运行模式
         print_color(Colors.BLUE, f"干运行模式: {self.args.dry_run}")
