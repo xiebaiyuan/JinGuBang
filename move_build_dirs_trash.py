@@ -487,22 +487,40 @@ class BuildDirCleaner:
         # 3. 路径分布统计
         print_color(Colors.BLUE, "\n按路径分布:")
         path_counts = defaultdict(int)
+        
+        # 找到所有项目的共同父路径
+        common_parent = os.path.commonpath(self.sorted_items) if self.sorted_items else ""
+        
+        # 获取项目路径层次
         for item in self.sorted_items:
             if os.path.exists(item):
-                # 获取前3级路径
-                parts = item.split(os.sep)
-                if len(parts) > 3:
-                    path_prefix = os.sep.join(parts[:3])
+                # 计算相对于共同父路径的路径
+                rel_path = os.path.relpath(os.path.dirname(item), common_parent)
+                if rel_path == ".":
+                    # 如果项目直接在共同父路径下
+                    path_counts[common_parent] += 1
                 else:
-                    path_prefix = os.sep.join(parts[:-1])
-                path_counts[path_prefix] += 1
+                    # 否则使用项目的父目录路径作为统计键
+                    project_path = os.path.dirname(item)
+                    path_counts[project_path] += 1
         
         # 显示主要路径分布
-        for path, count in sorted(path_counts.items(), key=lambda x: x[1], reverse=True)[:5]:
-            print(f"  {Colors.YELLOW}{path}{Colors.NC}: {count} 个项目")
+        print(f"  {Colors.YELLOW}共同父路径: {common_parent}{Colors.NC}")
+        print("  以下是将删除内容的具体分布:")
         
-        if len(path_counts) > 5:
-            print(f"  ... 等共 {len(path_counts)} 个路径")
+        for path, count in sorted(path_counts.items(), key=lambda x: x[1], reverse=True)[:10]:
+            # 显示相对路径或绝对路径
+            if path == common_parent:
+                display_path = f"[根目录]"
+            elif path.startswith(common_parent):
+                display_path = f".../{os.path.relpath(path, common_parent)}"
+            else:
+                display_path = path
+                
+            print(f"  {Colors.GREEN}{display_path}{Colors.NC}: {count} 个项目")
+        
+        if len(path_counts) > 10:
+            print(f"  ... 等共 {len(path_counts)} 个目录")
         
         # 4. 总体统计
         print_color(Colors.BLUE, "\n总体统计:")
