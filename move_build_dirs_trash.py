@@ -12,6 +12,8 @@ import tempfile
 import fnmatch
 from collections import defaultdict
 from datetime import datetime
+import json
+from pathlib import Path
 
 
 # 颜色定义
@@ -24,13 +26,58 @@ class Colors:
 
 
 # 日志文件
-LOG_FILE = f"/Users/{os.environ.get('USER')}/Downloads/clean_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
-
+LOG_DIR = Path(f"/Users/{os.environ.get('USER')}/Downloads")
+LOG_TIMESTAMP = datetime.now().strftime('%Y%m%d_%H%M%S')
+LOG_FILE = LOG_DIR / f"clean_{LOG_TIMESTAMP}.log"
+DELETED_ITEMS_FILE = LOG_DIR / f"deleted_items_{LOG_TIMESTAMP}.json"
+DELETED_SUMMARY_FILE = LOG_DIR / f"deleted_summary_{LOG_TIMESTAMP}.txt"
 
 def log_to_file(message):
     """写入日志到文件"""
     with open(LOG_FILE, 'a') as log_file:
         log_file.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - {message}\n")
+
+def save_deleted_items(deleted_items):
+    """保存已删除项目的详细信息到 JSON 文件"""
+    with open(DELETED_ITEMS_FILE, 'w') as f:
+        json.dump(deleted_items, f, indent=2)
+    
+    # 同时创建一个易读的文本摘要文件
+    with open(DELETED_SUMMARY_FILE, 'w') as f:
+        f.write(f"删除操作摘要 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write("=" * 60 + "\n\n")
+        
+        # 写入统计信息
+        total_dirs = sum(item['is_dir'] for item in deleted_items)
+        total_files = len(deleted_items) - total_dirs
+        f.write(f"删除目录数: {total_dirs}\n")
+        f.write(f"删除文件数: {total_files}\n")
+        f.write(f"总计: {len(deleted_items)} 个项目\n\n")
+        
+        # 按目录分组写入
+        current_parent = ""
+        for item in sorted(deleted_items, key=lambda x: x['path']):
+            parent = os.path.dirname(item['path'])
+            
+            # 当父目录变化时，打印一个新的标题
+            if parent != current_parent:
+                if current_parent:
+                    f.write("\n")
+                f.write(f"目录: {parent}\n")
+                f.write("-" * 50 + "\n")
+                current_parent = parent
+            
+            # 打印项目信息
+            item_type = "目录" if item['is_dir'] else "文件"
+            size_kb = item['size_kb']
+            if size_kb >= 1048576:
+                size_str = f"{size_kb/1048576:.2f} GB"
+            elif size_kb >= 1024:
+                size_str = f"{size_kb/1024:.2f} MB"
+            else:
+                size_str = f"{size_kb} KB"
+                
+            f.write(f"  {os.path.basename(item['path'])} ({item_type}, {size_str}, 匹配模式: {item['pattern']})\n")
 
 
 def print_color(color, message):
@@ -407,6 +454,9 @@ class BuildDirCleaner:
         self.file_type_counts.clear()
         self.total_sizes.clear()
         
+        # 用于跟踪所有成功删除的项目
+        deleted_items = []
+        
         total_items = len(self.sorted_items)
         progress = 0
         
@@ -427,17 +477,42 @@ class BuildDirCleaner:
             
             log_to_file(f"正在删除项目：{item}")
             
+            # 获取项目信息
+            is_dir = os.path.isdir(item)
+            pattern = self.get_matching_pattern(item)
+            
             try:
+                # 获取文件/目录大小
+                size_kb = 0
+                try:
+                    if is_dir:
+                        output = subprocess.check_output(['du', '-sk', item], stderr=subprocess.DEVNULL)
+                        size_kb = int(output.split()[0])
+                    else:
+                        size_kb = os.path.getsize(item) // 1024  # 转换为KB
+                except:
+                    # 如果无法获取大小，使用0
+                    pass
+                
                 # 使用trash命令移动到垃圾箱
                 subprocess.run(['trash', item], stderr=subprocess.DEVNULL, check=True)
                 log_to_file(f"成功删除项目：{item}")
                 self.success_items += 1
                 
+                # 记录已删除的项目信息
+                deleted_items.append({
+                    'path': item,
+                    'is_dir': is_dir,
+                    'pattern': pattern,
+                    'size_kb': size_kb,
+                    'timestamp': datetime.now().isoformat()
+                })
+                
                 # 更新统计信息
                 self.update_stats(item, True)
                 
                 # 如果是目录，添加到已删除路径列表
-                if os.path.isdir(item):
+                if is_dir:
                     self.deleted_dirs.append(item + os.sep)
                     
             except subprocess.SubprocessError:
@@ -456,6 +531,14 @@ class BuildDirCleaner:
         sys.stdout.flush()
         print_color(Colors.GREEN, "删除操作完成！")
         
+        # 保存已删除项目的详细记录
+        if deleted_items:
+            save_deleted_items(deleted_items)
+            print_color(Colors.GREEN, f"删除记录已保存到:")
+            print(f"  - 详细日志: {LOG_FILE}")
+            print(f"  - 删除记录 (JSON): {DELETED_ITEMS_FILE}")
+            print(f"  - 删除摘要: {DELETED_SUMMARY_FILE}")
+        
         # 显示最终统计
         self.show_final_stats()
         
@@ -464,8 +547,6 @@ class BuildDirCleaner:
         print_color(Colors.YELLOW, f"跳过项目：{self.skipped_items} 个项目")
         if self.failed_items > 0:
             print_color(Colors.RED, f"删除失败：{self.failed_items} 个项目")
-            
-        print_color(Colors.GREEN, f"日志已保存到 {LOG_FILE}")
 
     def run(self):
         """运行清理过程"""
