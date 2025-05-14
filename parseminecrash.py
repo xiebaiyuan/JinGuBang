@@ -136,22 +136,63 @@ def extract_lib_info(backtrace_item: str) -> Tuple[str, str, str, Optional[str]]
         return "?", "0", "unknown", None
 
 
-def addr2line(addr2line_path: str, lib_path: str, offset: str) -> List[str]:
-    """使用addr2line工具解析地址"""
+def addr2line(addr2line_path: str, lib_path: str, offset: str) -> List[Dict[str, str]]:
+    """使用addr2line工具解析地址，返回详细的源码位置信息"""
     if not os.path.exists(lib_path):
-        return [f"无法找到库文件: {lib_path}"]
+        return [{"symbol": f"无法找到库文件: {lib_path}", "source_path": ""}]
     
     try:
-        cmd = [addr2line_path, "-e", lib_path, "-f", "-C", "-p", offset]
+        # 使用完整参数调用addr2line以获取详细信息
+        cmd = [addr2line_path, "-C", "-f", "-i", "-a", "-p", "-e", lib_path, offset]
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        lines = result.stdout.strip().split('\n')
-        if not lines or all(line == "?? ??:0" for line in lines):
-            return ["无法解析符号 (可能缺少调试信息)"]
-        return lines
+        
+        output_lines = result.stdout.strip().split('\n')
+        results = []
+        
+        # 处理输出格式: 0xXXXXXX: function at /path/to/file.cc:line
+        i = 0
+        while i < len(output_lines):
+            line = output_lines[i].strip()
+            if line.startswith("0x"):
+                result_entry = {"address": line.split(':')[0].strip()}
+                
+                # 检查是否有下一行
+                if i + 1 < len(output_lines):
+                    next_line = output_lines[i+1].strip()
+                    
+                    # 如果下一行包含 "at" 关键字，说明有源文件信息
+                    if " at " in next_line:
+                        function_part, source_part = next_line.split(" at ", 1)
+                        result_entry["symbol"] = function_part.strip()
+                        result_entry["source_path"] = source_part.strip()
+                    else:
+                        result_entry["symbol"] = next_line
+                        result_entry["source_path"] = ""
+                    
+                    i += 2
+                else:
+                    result_entry["symbol"] = "??"
+                    result_entry["source_path"] = ""
+                    i += 1
+                
+                results.append(result_entry)
+            else:
+                # 如果格式不符合预期，直接添加整行
+                results.append({
+                    "address": "",
+                    "symbol": line,
+                    "source_path": ""
+                })
+                i += 1
+        
+        if not results:
+            return [{"symbol": "无法解析符号 (可能缺少调试信息)", "source_path": ""}]
+        
+        return results
     except subprocess.CalledProcessError as e:
-        return [f"addr2line 执行失败: {e.stderr}"]
+        return [{"symbol": f"addr2line 执行失败: {e.stderr}", "source_path": ""}]
     except Exception as e:
-        return [f"错误: {str(e)}"]
+        return [{"symbol": f"错误: {str(e)}", "source_path": ""}]
 
 
 def is_target_lib(lib_name: str, target_lib: str) -> bool:
@@ -191,8 +232,11 @@ def print_crash_info(crash_info: CrashInfo, target_lib: str, lib_path: str, addr
                 print(f"{Colors.GREEN}#{item[0]} {Colors.YELLOW}pc {item[1]} {Colors.CYAN}{lib_name}{Colors.ENDC}")
                 
                 symbol_info = addr2line(addr2line_path, lib_path, item[1])
-                for line in symbol_info:
-                    print(f"    {Colors.BOLD}{Colors.BLUE}↪ {line}{Colors.ENDC}")
+                for info in symbol_info:
+                    if info.get("source_path"):
+                        print(f"    {Colors.BOLD}{Colors.BLUE}↪ {info['address']}: {info['symbol']} at {Colors.UNDERLINE}{info['source_path']}{Colors.ENDC}")
+                    else:
+                        print(f"    {Colors.BOLD}{Colors.BLUE}↪ {info['symbol']}{Colors.ENDC}")
                 
                 if function:
                     print(f"    {Colors.YELLOW}Function: {function}{Colors.ENDC}")
@@ -209,7 +253,7 @@ def main():
     parser.add_argument('-l', '--library', help='符号库路径', default='')
     parser.add_argument('-a', '--addr2line', 
                        help='addr2line工具路径',
-                       default='/android-ndk-r25b/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-addr2line')
+                       default='/opt/android-ndk-r25b/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-addr2line')
     parser.add_argument('-t', '--target', help='要解析的目标库名称', default='libmml_framework.so')
     parser.add_argument('-v', '--verbose', help='输出详细信息', action='store_true')
     
