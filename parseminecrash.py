@@ -303,6 +303,32 @@ def print_crash_info(crash_info: CrashInfo, target_lib: str, lib_path: str, addr
             import traceback
             traceback.print_exc()
 
+def analyze_library_with_nm(nm_path: str, lib_path: str) -> List[Dict[str, str]]:
+    """使用nm分析库中的符号"""
+    if not os.path.exists(lib_path):
+        return [{"error": f"无法找到库文件: {lib_path}"}]
+    
+    try:
+        cmd = [nm_path, "-C", lib_path]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        
+        output_lines = result.stdout.strip().split('\n')
+        symbols = []
+        
+        for line in output_lines:
+            if line.strip():
+                parts = line.strip().split(' ', 2)
+                if len(parts) >= 2:
+                    symbol = {
+                        "address": parts[0] if parts[0] != '' else "未定义地址",
+                        "type": parts[1] if len(parts) > 1 else "",
+                        "name": parts[2] if len(parts) > 2 else "未知符号"
+                    }
+                    symbols.append(symbol)
+        
+        return symbols
+    except Exception as e:
+        return [{"error": f"nm分析失败: {str(e)}"}]
 def main():
     parser = argparse.ArgumentParser(description='解析Android崩溃堆栈')
     parser.add_argument('-i', '--input', help='崩溃日志文件路径 (默认从标准输入读取)')
@@ -312,7 +338,12 @@ def main():
                        default='/opt/android-ndk-r25b/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-addr2line')
     parser.add_argument('-t', '--target', help='要解析的目标库名称', default='libmml_framework.so')
     parser.add_argument('-v', '--verbose', help='输出详细信息', action='store_true')
-    
+    parser.add_argument('--nm', help='nm工具路径', 
+                   default='/opt/android-ndk-r25b/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-nm')
+    parser.add_argument('--objdump', help='objdump工具路径',
+                    default='/opt/android-ndk-r25b/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-objdump')
+    parser.add_argument('--analyze-full', action='store_true', 
+                        help='使用所有可用工具进行全面分析')
     args = parser.parse_args()
     
     # 读取崩溃日志
@@ -343,9 +374,26 @@ def main():
     
     # 处理符号库路径
     lib_path = parse_library_path(args.library)
+    
     if args.library and not os.path.exists(lib_path):
         print(f"{Colors.RED}警告: 找不到指定的库文件: {lib_path}{Colors.ENDC}")
-    
+        if args.analyze_full and os.path.exists(lib_path):
+        print(f"\n{Colors.HEADER}{Colors.BOLD}库文件详细分析:{Colors.ENDC}")
+        
+        # 使用nm查看符号表
+        if args.nm and os.path.exists(args.nm):
+            print(f"\n{Colors.BLUE}符号表分析 (nm):{Colors.ENDC}")
+            symbols = analyze_library_with_nm(args.nm, lib_path)
+            # 显示与崩溃相关的符号
+            for item in crash_info.backtrace:
+                _, pc_offset, lib_name, _ = extract_lib_info(item[2])
+                if is_target_lib(lib_name, target_lib):
+                    related_symbols = find_related_symbols(symbols, pc_offset)
+                    if related_symbols:
+                        print(f"{Colors.YELLOW}与地址 {pc_offset} 相关的符号:{Colors.ENDC}")
+                        for sym in related_symbols:
+                            print(f"  {Colors.CYAN}{sym['address']} {sym['type']} {sym['name']}{Colors.ENDC}")
+
     # 处理addr2line路径
     addr2line_path = parse_library_path(args.addr2line)
     if not os.path.exists(addr2line_path):
