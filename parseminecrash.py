@@ -374,10 +374,10 @@ def main():
     
     # 处理符号库路径
     lib_path = parse_library_path(args.library)
-    
+
     if args.library and not os.path.exists(lib_path):
         print(f"{Colors.RED}警告: 找不到指定的库文件: {lib_path}{Colors.ENDC}")
-        if args.analyze_full and os.path.exists(lib_path):
+    if args.analyze_full and os.path.exists(lib_path):
         print(f"\n{Colors.HEADER}{Colors.BOLD}库文件详细分析:{Colors.ENDC}")
         
         # 使用nm查看符号表
