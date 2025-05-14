@@ -337,6 +337,7 @@ def analyze_library_with_nm(nm_path: str, lib_path: str) -> List[Dict[str, str]]
         return symbols
     except Exception as e:
         return [{"error": f"nm分析失败: {str(e)}"}]
+
 def main():
     parser = argparse.ArgumentParser(description='解析Android崩溃堆栈')
     parser.add_argument('-i', '--input', help='崩溃日志文件路径 (默认从标准输入读取)')
@@ -385,10 +386,12 @@ def main():
 
     if args.library and not os.path.exists(lib_path):
         print(f"{Colors.RED}警告: 找不到指定的库文件: {lib_path}{Colors.ENDC}")
+    
+    # 进行全面分析
     if args.analyze_full and os.path.exists(lib_path):
         print(f"\n{Colors.HEADER}{Colors.BOLD}库文件详细分析:{Colors.ENDC}")
         
-                    related_symbols = find_related_symbols(symbols, pc_offset) if 'find_related_symbols' in globals() else []
+        # 使用nm查看符号表
         if args.nm and os.path.exists(args.nm):
             print(f"\n{Colors.BLUE}符号表分析 (nm):{Colors.ENDC}")
             symbols = analyze_library_with_nm(args.nm, lib_path)
