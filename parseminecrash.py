@@ -156,62 +156,69 @@ def addr2line(addr2line_path: str, lib_path: str, offset: str) -> List[Dict[str,
         
         results = []
         
-        # 处理输出格式: 0xXXXXXX: function at /path/to/file.cc:line
-        i = 0
-        while i < len(output_lines):
-            line = output_lines[i].strip()
-            if line.startswith("0x"):
-                result_entry = {"address": line.split(':')[0].strip()}
-                
-                # 检查是否有下一行
-                if i + 1 < len(output_lines):
-                    next_line = output_lines[i+1].strip()
-                    
-                    # 如果下一行包含 "at" 关键字，说明有源文件信息
-                    if " at " in next_line:
-                        function_part, source_part = next_line.split(" at ", 1)
-                        result_entry["symbol"] = function_part.strip()
-                        result_entry["source_path"] = source_part.strip()
-                    else:
-                        result_entry["symbol"] = next_line
-                        result_entry["source_path"] = ""
-                    
-                    i += 2
+        # 直接处理整合格式: 0xXXXXXX: function at /path/to/file.cc:line
+        for line in output_lines:
+            line = line.strip()
+            if "at" in line:
+                # 匹配格式: 0xXXXXXX: function at /path/to/file.cc:line
+                addr_and_func, source = line.split(" at ", 1)
+                if ":" in addr_and_func:
+                    addr, func = addr_and_func.split(":", 1)
+                    results.append({
+                        "address": addr.strip(),
+                        "symbol": func.strip(),
+                        "source_path": source.strip()
+                    })
                 else:
-                    result_entry["symbol"] = "??"
-                    result_entry["source_path"] = ""
-                    i += 1
-                
-                results.append(result_entry)
+                    results.append({
+                        "address": "",
+                        "symbol": addr_and_func.strip(),
+                        "source_path": source.strip()
+                    })
             else:
-                # 如果格式不符合预期，直接添加整行
+                # 处理没有源文件信息的行
                 results.append({
                     "address": "",
                     "symbol": line,
                     "source_path": ""
                 })
-                i += 1
         
+        # 如果没有解析出结果，尝试使用原来的解析方法
         if not results:
-            # 尝试解析简单格式的输出
-            for line in output_lines:
-                if ":" in line and not line.startswith("0x"):
-                    parts = line.split(":", 1)
-                    if len(parts) == 2:
-                        results.append({
-                            "address": "",
-                            "symbol": parts[0].strip(),
-                            "source_path": parts[1].strip()
-                        })
-        
-        if not results:
-            # 如果还是解析不了，可能是直接输出了函数名或地址
-            for line in output_lines:
-                results.append({
-                    "address": "",
-                    "symbol": line.strip(),
-                    "source_path": ""
-                })
+            i = 0
+            while i < len(output_lines):
+                line = output_lines[i].strip()
+                if line.startswith("0x"):
+                    result_entry = {"address": line.split(':')[0].strip()}
+                    
+                    # 检查是否有下一行
+                    if i + 1 < len(output_lines):
+                        next_line = output_lines[i+1].strip()
+                        
+                        # 如果下一行包含 "at" 关键字，说明有源文件信息
+                        if " at " in next_line:
+                            function_part, source_part = next_line.split(" at ", 1)
+                            result_entry["symbol"] = function_part.strip()
+                            result_entry["source_path"] = source_part.strip()
+                        else:
+                            result_entry["symbol"] = next_line
+                            result_entry["source_path"] = ""
+                        
+                        i += 2
+                    else:
+                        result_entry["symbol"] = "??"
+                        result_entry["source_path"] = ""
+                        i += 1
+                    
+                    results.append(result_entry)
+                else:
+                    # 如果格式不符合预期，直接添加整行
+                    results.append({
+                        "address": "",
+                        "symbol": line,
+                        "source_path": ""
+                    })
+                    i += 1
         
         return results
     except subprocess.CalledProcessError as e:
@@ -221,7 +228,6 @@ def addr2line(addr2line_path: str, lib_path: str, offset: str) -> List[Dict[str,
     except Exception as e:
         print(f"{Colors.RED}addr2line 解析错误: {str(e)}{Colors.ENDC}")
         return [{"symbol": f"错误: {str(e)}", "source_path": ""}]
-
 
 def is_target_lib(lib_name: str, target_lib: str) -> bool:
     """检查是否是目标库"""
@@ -271,20 +277,19 @@ def print_crash_info(crash_info: CrashInfo, target_lib: str, lib_path: str, addr
                 
                 symbol_info = addr2line(addr2line_path, lib_path, item[1])
                 
-                # 确保我们至少有一个有意义的解析结果
-                has_meaningful_results = False
+                # 检查原始输出是否有内容
+                raw_outputs = []
                 for info in symbol_info:
-                    if info.get("symbol") and info.get("symbol") != "??" and not info.get("symbol").startswith("无法"):
-                        has_meaningful_results = True
-                        break
-                
-                if has_meaningful_results:
-                    for info in symbol_info:
+                    if info.get("symbol") and info.get("symbol") != "??":
                         if info.get("source_path"):
                             addr_info = f"{info['address']}: " if info.get('address') else ""
-                            print(f"    {Colors.BOLD}{Colors.BLUE}↪ {addr_info}{info['symbol']} at {Colors.UNDERLINE}{info['source_path']}{Colors.ENDC}")
+                            raw_outputs.append(f"{addr_info}{info['symbol']} at {info['source_path']}")
                         else:
-                            print(f"    {Colors.BOLD}{Colors.BLUE}↪ {info['symbol']}{Colors.ENDC}")
+                            raw_outputs.append(info['symbol'])
+                
+                if raw_outputs:
+                    for output in raw_outputs:
+                        print(f"    {Colors.BOLD}{Colors.BLUE}↪ {output}{Colors.ENDC}")
                 else:
                     print(f"    {Colors.RED}无法解析符号 (可能缺少调试信息){Colors.ENDC}")
                 
@@ -297,7 +302,6 @@ def print_crash_info(crash_info: CrashInfo, target_lib: str, lib_path: str, addr
             print(f"{Colors.RED}解析堆栈项时出错 #{item[0]}: {str(e)}{Colors.ENDC}")
             import traceback
             traceback.print_exc()
-
 
 def main():
     parser = argparse.ArgumentParser(description='解析Android崩溃堆栈')
