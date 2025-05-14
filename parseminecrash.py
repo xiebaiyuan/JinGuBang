@@ -144,9 +144,16 @@ def addr2line(addr2line_path: str, lib_path: str, offset: str) -> List[Dict[str,
     try:
         # 使用完整参数调用addr2line以获取详细信息
         cmd = [addr2line_path, "-C", "-f", "-i", "-a", "-p", "-e", lib_path, offset]
+        
+        if os.path.exists(addr2line_path):
+            print(f"{Colors.CYAN}执行命令: {' '.join(cmd)}{Colors.ENDC}")
+        
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
         
         output_lines = result.stdout.strip().split('\n')
+        if output_lines:
+            print(f"{Colors.CYAN}addr2line原始输出: {output_lines}{Colors.ENDC}")
+        
         results = []
         
         # 处理输出格式: 0xXXXXXX: function at /path/to/file.cc:line
@@ -186,12 +193,33 @@ def addr2line(addr2line_path: str, lib_path: str, offset: str) -> List[Dict[str,
                 i += 1
         
         if not results:
-            return [{"symbol": "无法解析符号 (可能缺少调试信息)", "source_path": ""}]
+            # 尝试解析简单格式的输出
+            for line in output_lines:
+                if ":" in line and not line.startswith("0x"):
+                    parts = line.split(":", 1)
+                    if len(parts) == 2:
+                        results.append({
+                            "address": "",
+                            "symbol": parts[0].strip(),
+                            "source_path": parts[1].strip()
+                        })
+        
+        if not results:
+            # 如果还是解析不了，可能是直接输出了函数名或地址
+            for line in output_lines:
+                results.append({
+                    "address": "",
+                    "symbol": line.strip(),
+                    "source_path": ""
+                })
         
         return results
     except subprocess.CalledProcessError as e:
-        return [{"symbol": f"addr2line 执行失败: {e.stderr}", "source_path": ""}]
+        error_msg = e.stderr if e.stderr else str(e)
+        print(f"{Colors.RED}addr2line 执行失败: {error_msg}{Colors.ENDC}")
+        return [{"symbol": f"addr2line 执行失败: {error_msg}", "source_path": ""}]
     except Exception as e:
+        print(f"{Colors.RED}addr2line 解析错误: {str(e)}{Colors.ENDC}")
         return [{"symbol": f"错误: {str(e)}", "source_path": ""}]
 
 
@@ -223,20 +251,42 @@ def print_crash_info(crash_info: CrashInfo, target_lib: str, lib_path: str, addr
         print(f"{Colors.RED}未找到堆栈回溯信息{Colors.ENDC}")
         return
         
+    # 显示符号解析选项
+    if lib_path:
+        print(f"{Colors.YELLOW}使用符号库: {lib_path}{Colors.ENDC}")
+    if addr2line_path:
+        print(f"{Colors.YELLOW}使用addr2line工具: {addr2line_path}{Colors.ENDC}")
+    if target_lib:
+        print(f"{Colors.YELLOW}解析目标库: {target_lib}{Colors.ENDC}")
+    
+    print()
+    
     for item in crash_info.backtrace:
         try:
             frame_num, pc_offset, lib_name, function = extract_lib_info(item[2])
             
             # 如果是目标库，解析地址
-            if is_target_lib(lib_name, target_lib) and lib_path:
+            if is_target_lib(lib_name, target_lib) and lib_path and os.path.exists(lib_path):
                 print(f"{Colors.GREEN}#{item[0]} {Colors.YELLOW}pc {item[1]} {Colors.CYAN}{lib_name}{Colors.ENDC}")
                 
                 symbol_info = addr2line(addr2line_path, lib_path, item[1])
+                
+                # 确保我们至少有一个有意义的解析结果
+                has_meaningful_results = False
                 for info in symbol_info:
-                    if info.get("source_path"):
-                        print(f"    {Colors.BOLD}{Colors.BLUE}↪ {info['address']}: {info['symbol']} at {Colors.UNDERLINE}{info['source_path']}{Colors.ENDC}")
-                    else:
-                        print(f"    {Colors.BOLD}{Colors.BLUE}↪ {info['symbol']}{Colors.ENDC}")
+                    if info.get("symbol") and info.get("symbol") != "??" and not info.get("symbol").startswith("无法"):
+                        has_meaningful_results = True
+                        break
+                
+                if has_meaningful_results:
+                    for info in symbol_info:
+                        if info.get("source_path"):
+                            addr_info = f"{info['address']}: " if info.get('address') else ""
+                            print(f"    {Colors.BOLD}{Colors.BLUE}↪ {addr_info}{info['symbol']} at {Colors.UNDERLINE}{info['source_path']}{Colors.ENDC}")
+                        else:
+                            print(f"    {Colors.BOLD}{Colors.BLUE}↪ {info['symbol']}{Colors.ENDC}")
+                else:
+                    print(f"    {Colors.RED}无法解析符号 (可能缺少调试信息){Colors.ENDC}")
                 
                 if function:
                     print(f"    {Colors.YELLOW}Function: {function}{Colors.ENDC}")
@@ -245,6 +295,8 @@ def print_crash_info(crash_info: CrashInfo, target_lib: str, lib_path: str, addr
                 print(f"{Colors.GREEN}#{item[0]} {Colors.YELLOW}pc {item[1]} {Colors.CYAN}{lib_name}{Colors.YELLOW}{function_info}{Colors.ENDC}")
         except Exception as e:
             print(f"{Colors.RED}解析堆栈项时出错 #{item[0]}: {str(e)}{Colors.ENDC}")
+            import traceback
+            traceback.print_exc()
 
 
 def main():
