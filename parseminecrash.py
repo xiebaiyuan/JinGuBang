@@ -303,6 +303,14 @@ def print_crash_info(crash_info: CrashInfo, target_lib: str, lib_path: str, addr
             import traceback
             traceback.print_exc()
 
+def find_related_symbols(symbols: List[Dict[str, str]], pc_offset: str) -> List[Dict[str, str]]:
+    """查找与特定PC偏移地址相关的符号"""
+    related = []
+    for symbol in symbols:
+        if symbol.get("address") and pc_offset in symbol["address"]:
+            related.append(symbol)
+    return related
+
 def analyze_library_with_nm(nm_path: str, lib_path: str) -> List[Dict[str, str]]:
     """使用nm分析库中的符号"""
     if not os.path.exists(lib_path):
@@ -380,14 +388,14 @@ def main():
     if args.analyze_full and os.path.exists(lib_path):
         print(f"\n{Colors.HEADER}{Colors.BOLD}库文件详细分析:{Colors.ENDC}")
         
-        # 使用nm查看符号表
+                    related_symbols = find_related_symbols(symbols, pc_offset) if 'find_related_symbols' in globals() else []
         if args.nm and os.path.exists(args.nm):
             print(f"\n{Colors.BLUE}符号表分析 (nm):{Colors.ENDC}")
             symbols = analyze_library_with_nm(args.nm, lib_path)
             # 显示与崩溃相关的符号
             for item in crash_info.backtrace:
                 _, pc_offset, lib_name, _ = extract_lib_info(item[2])
-                if is_target_lib(lib_name, target_lib):
+                if is_target_lib(lib_name, args.target):
                     related_symbols = find_related_symbols(symbols, pc_offset)
                     if related_symbols:
                         print(f"{Colors.YELLOW}与地址 {pc_offset} 相关的符号:{Colors.ENDC}")
