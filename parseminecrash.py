@@ -39,7 +39,7 @@ def parse_crash_log(log_content: str) -> CrashInfo:
     crash_info = CrashInfo()
     
     # 解析基本信息
-    abi_match = re.search(r"ABI: '([^']+)'", log_content)
+    abi_match = re.search(r"ABI: '?([^'\n]+)'?", log_content)
     if abi_match:
         crash_info.abi = abi_match.group(1)
     
@@ -63,52 +63,95 @@ def parse_crash_log(log_content: str) -> CrashInfo:
     register_pattern = r"x\d+\s+[0-9a-fA-F]+"
     crash_info.registers = re.findall(register_pattern, log_content)
     
-    # 解析堆栈回溯
-    backtrace_pattern = r"#(\d+)\s+pc\s+([0-9a-fA-F]+)\s+([^\n]+)"
-    crash_info.backtrace = re.findall(backtrace_pattern, log_content)
+    # 解析堆栈回溯 - 支持多种格式
+    # 首先尝试标准格式
+    backtrace_section = re.search(r"backtrace:(.+?)(?:\n\n|\Z)", log_content, re.DOTALL)
+    if backtrace_section:
+        backtrace_text = backtrace_section.group(1).strip()
+        # 尝试匹配详细格式: #00 pc 00000000 /path/to/lib.so (function+offset)
+        standard_pattern = r"#(\d+)\s+pc\s+([0-9a-fA-F]+)\s+([^\n]+)"
+        backtrace = re.findall(standard_pattern, backtrace_text)
+        
+        # 如果没有匹配到标准格式，尝试简化格式: #00 pc 00000000 lib.so (function)
+        if not backtrace:
+            simple_pattern = r"#(\d+)\s+pc\s+([0-9a-fA-F]+)\s+([^\s\n]+)(?:\s+\(([^)]+)\))?"
+            backtrace_matches = re.findall(simple_pattern, backtrace_text)
+            # 转换简化格式匹配结果为标准格式
+            backtrace = [(frame, offset, lib + (f" ({func})" if func else "")) 
+                        for frame, offset, lib, func in backtrace_matches]
+        
+        crash_info.backtrace = backtrace
+    
+    # 如果堆栈回溯仍然为空，尝试其他格式
+    if not crash_info.backtrace:
+        # 尝试直接匹配堆栈行
+        backtrace_alt_pattern = r"#(\d+)\s+pc\s+([0-9a-fA-F]+)\s+([^\n]+)"
+        crash_info.backtrace = re.findall(backtrace_alt_pattern, log_content)
     
     return crash_info
 
 
 def parse_library_path(lib_path: str) -> str:
     """规范化库的路径"""
+    if not lib_path:
+        return ""
     return os.path.abspath(os.path.expanduser(lib_path))
 
 
 def extract_lib_info(backtrace_item: str) -> Tuple[str, str, str, Optional[str]]:
     """从堆栈回溯项中提取库信息"""
-    # 格式: #00 pc 0000000000591e28 /path/to/lib.so (可能有附加信息) (BuildId: xxx)
-    parts = backtrace_item.strip().split()
-    frame_num = parts[0]
-    pc_offset = parts[2]
-    
-    # 提取库路径
-    lib_path_match = re.search(r"(/[^ ]+\.so)", backtrace_item)
-    lib_path = lib_path_match.group(1) if lib_path_match else ""
-    
-    # 提取函数名 (如果有)
-    function_match = re.search(r"\((.*?)\)", backtrace_item)
-    function = function_match.group(1) if function_match and not function_match.group(1).startswith("BuildId") else None
-    
-    # 从路径中提取库名
-    lib_name = os.path.basename(lib_path) if lib_path else "unknown"
-    
-    return frame_num, pc_offset, lib_name, function
+    # 处理多种输入格式
+    try:
+        # 尝试解析完整路径格式: /path/to/lib.so (function+offset)
+        lib_path_match = re.search(r"(/[^ ]+\.so)", backtrace_item)
+        if lib_path_match:
+            lib_path = lib_path_match.group(1)
+            lib_name = os.path.basename(lib_path)
+        else:
+            # 尝试解析简单格式: libname.so (function)
+            lib_name_match = re.search(r"([^\s/]+\.so)", backtrace_item)
+            if lib_name_match:
+                lib_name = lib_name_match.group(1)
+                lib_path = lib_name
+            else:
+                lib_name = "unknown"
+                lib_path = ""
+        
+        # 获取PC偏移地址
+        pc_offset_match = re.search(r"pc\s+([0-9a-fA-F]+)", backtrace_item)
+        pc_offset = pc_offset_match.group(1) if pc_offset_match else "0"
+        
+        # 获取帧号
+        frame_match = re.search(r"#(\d+)", backtrace_item)
+        frame_num = frame_match.group(1) if frame_match else "?"
+        
+        # 提取函数名 (如果有)
+        function_match = re.search(r"\((.*?(?:\+\d+)?)\)", backtrace_item)
+        function = function_match.group(1) if function_match and not function_match.group(1).startswith("BuildId") else None
+        
+        return frame_num, pc_offset, lib_name, function
+        
+    except Exception as e:
+        print(f"警告: 解析堆栈项时出错: {backtrace_item}, 错误: {str(e)}", file=sys.stderr)
+        return "?", "0", "unknown", None
 
 
 def addr2line(addr2line_path: str, lib_path: str, offset: str) -> List[str]:
     """使用addr2line工具解析地址"""
     if not os.path.exists(lib_path):
-        return [f"Unable to locate library: {lib_path}"]
+        return [f"无法找到库文件: {lib_path}"]
     
     try:
         cmd = [addr2line_path, "-e", lib_path, "-f", "-C", "-p", offset]
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        return result.stdout.strip().split('\n')
+        lines = result.stdout.strip().split('\n')
+        if not lines or all(line == "?? ??:0" for line in lines):
+            return ["无法解析符号 (可能缺少调试信息)"]
+        return lines
     except subprocess.CalledProcessError as e:
-        return [f"addr2line failed: {e.stderr}"]
+        return [f"addr2line 执行失败: {e.stderr}"]
     except Exception as e:
-        return [f"Error: {str(e)}"]
+        return [f"错误: {str(e)}"]
 
 
 def is_target_lib(lib_name: str, target_lib: str) -> bool:
@@ -135,22 +178,29 @@ def print_crash_info(crash_info: CrashInfo, target_lib: str, lib_path: str, addr
     print("\n")
     
     print(f"{Colors.HEADER}{Colors.BOLD}堆栈回溯:{Colors.ENDC}")
-    for item in crash_info.backtrace:
-        frame_num, pc_offset, lib_name, function = extract_lib_info(item[2])
+    if not crash_info.backtrace:
+        print(f"{Colors.RED}未找到堆栈回溯信息{Colors.ENDC}")
+        return
         
-        # 如果是目标库，解析地址
-        if is_target_lib(lib_name, target_lib) and lib_path:
-            print(f"{Colors.GREEN}#{item[0]} {Colors.YELLOW}pc {item[1]} {Colors.CYAN}{lib_name}{Colors.ENDC}")
+    for item in crash_info.backtrace:
+        try:
+            frame_num, pc_offset, lib_name, function = extract_lib_info(item[2])
             
-            symbol_info = addr2line(addr2line_path, lib_path, item[1])
-            for line in symbol_info:
-                print(f"    {Colors.BOLD}{Colors.BLUE}↪ {line}{Colors.ENDC}")
-            
-            if function:
-                print(f"    {Colors.YELLOW}Function: {function}{Colors.ENDC}")
-        else:
-            function_info = f" ({function})" if function else ""
-            print(f"{Colors.GREEN}#{item[0]} {Colors.YELLOW}pc {item[1]} {Colors.CYAN}{lib_name}{Colors.YELLOW}{function_info}{Colors.ENDC}")
+            # 如果是目标库，解析地址
+            if is_target_lib(lib_name, target_lib) and lib_path:
+                print(f"{Colors.GREEN}#{item[0]} {Colors.YELLOW}pc {item[1]} {Colors.CYAN}{lib_name}{Colors.ENDC}")
+                
+                symbol_info = addr2line(addr2line_path, lib_path, item[1])
+                for line in symbol_info:
+                    print(f"    {Colors.BOLD}{Colors.BLUE}↪ {line}{Colors.ENDC}")
+                
+                if function:
+                    print(f"    {Colors.YELLOW}Function: {function}{Colors.ENDC}")
+            else:
+                function_info = f" ({function})" if function else ""
+                print(f"{Colors.GREEN}#{item[0]} {Colors.YELLOW}pc {item[1]} {Colors.CYAN}{lib_name}{Colors.YELLOW}{function_info}{Colors.ENDC}")
+        except Exception as e:
+            print(f"{Colors.RED}解析堆栈项时出错 #{item[0]}: {str(e)}{Colors.ENDC}")
 
 
 def main():
@@ -161,6 +211,7 @@ def main():
                        help='addr2line工具路径',
                        default='/android-ndk-r25b/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-addr2line')
     parser.add_argument('-t', '--target', help='要解析的目标库名称', default='libmml_framework.so')
+    parser.add_argument('-v', '--verbose', help='输出详细信息', action='store_true')
     
     args = parser.parse_args()
     
@@ -170,28 +221,55 @@ def main():
             with open(args.input, 'r') as f:
                 crash_content = f.read()
         except Exception as e:
-            print(f"无法读取文件 {args.input}: {str(e)}")
+            print(f"{Colors.RED}无法读取文件 {args.input}: {str(e)}{Colors.ENDC}")
             return
     else:
         # 从标准输入读取或显示帮助
         if sys.stdin.isatty():
             parser.print_help()
-            print("\n请通过管道或--input参数提供崩溃日志。")
+            print(f"\n{Colors.YELLOW}请通过管道或--input参数提供崩溃日志。{Colors.ENDC}")
+            print(f"\n{Colors.GREEN}示例用法:{Colors.ENDC}")
+            print(f"  cat crash.txt | python {sys.argv[0]}")
+            print(f"  python {sys.argv[0]} -i crash.txt -l /path/to/lib.so")
+            print(f"  python {sys.argv[0]} -l /path/to/lib.so -a /path/to/addr2line -t libname.so < crash.txt")
             return
         crash_content = sys.stdin.read()
+    
+    if args.verbose:
+        print(f"{Colors.BLUE}处理崩溃日志...{Colors.ENDC}")
     
     # 解析崩溃日志
     crash_info = parse_crash_log(crash_content)
     
     # 处理符号库路径
-    lib_path = parse_library_path(args.library) if args.library else ""
+    lib_path = parse_library_path(args.library)
+    if args.library and not os.path.exists(lib_path):
+        print(f"{Colors.RED}警告: 找不到指定的库文件: {lib_path}{Colors.ENDC}")
     
     # 处理addr2line路径
     addr2line_path = parse_library_path(args.addr2line)
+    if not os.path.exists(addr2line_path):
+        print(f"{Colors.RED}警告: 找不到addr2line工具: {addr2line_path}{Colors.ENDC}")
+        print(f"{Colors.YELLOW}尝试在系统PATH中查找addr2line...{Colors.ENDC}")
+        try:
+            result = subprocess.run(["which", "addr2line"], capture_output=True, text=True)
+            if result.returncode == 0 and result.stdout.strip():
+                addr2line_path = result.stdout.strip()
+                print(f"{Colors.GREEN}找到addr2line: {addr2line_path}{Colors.ENDC}")
+            else:
+                print(f"{Colors.RED}在系统PATH中未找到addr2line工具{Colors.ENDC}")
+        except:
+            print(f"{Colors.RED}无法在系统中查找addr2line工具{Colors.ENDC}")
     
     # 打印解析结果
     print_crash_info(crash_info, args.target, lib_path, addr2line_path)
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except Exception as e:
+        print(f"{Colors.RED}发生错误: {str(e)}{Colors.ENDC}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
