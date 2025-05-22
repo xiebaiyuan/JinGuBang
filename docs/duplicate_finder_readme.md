@@ -1,13 +1,3 @@
-# WUKONG_TOOLS
-
-## Tools for my daily work.  Powerful as Wukong.
-
-### 1. Collect markdown images
-python collect_md.py demo.md -o md_images -d  /Users/xiebaiyuan/Documents/md_collects/
-
-### 2. Move build directories to trash
-see [clean_build_readme.md](docs/clean_build_readme.md)
-
 ### 3. 重复文件查找器 (Duplicate Finder)
 
 这是一个用于查找和移除文件系统中重复文件的命令行工具，它能够帮助您节省存储空间，保持文件系统整洁。
@@ -101,6 +91,3 @@ python duplicate_finder.py /path/to/directory --debug
 - 使用 `--debug` 选项可以看到更详细的处理过程
 - 文件被移动到回收站后，您仍然可以从系统回收站恢复它们
 - 处理大量文件时，请确保有足够的系统内存用于计算和存储文件哈希值
-
-## Disclaimer: 
-These scripts is untested and provided “as is” without any warranties or guarantees of any kind. Use it at your own risk. The author assumes no responsibility for any errors, omissions, or damages resulting from the use of this script. Please exercise caution and thoroughly test the script in a safe environment before deploying it in a production setting.
