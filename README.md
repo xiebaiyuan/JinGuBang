@@ -1,12 +1,18 @@
 # WUKONG_TOOLS
 
-## Tools for my daily work.  Powerful as Wukong.
+## Tools for my daily work. Powerful as Wukong.
 
 ### 1. Collect markdown images
-python collect_md.py demo.md -o md_images -d  /Users/xiebaiyuan/Documents/md_collects/
+python collect_md.py demo.md -o md_images -d /Users/xiebaiyuan/Documents/md_collects/
 
 ### 2. Move build directories to trash
 see [clean_build_readme.md](docs/clean_build_readme.md)
+
+### 3. Export Git commits to patches
+see [export_commits_to_patches_readme.md](docs/export_commits_to_patches_readme.md)
+
+### 3. Export Git commits to patches
+see [export_commits_to_patches_readme.md](docs/export_commits_to_patches_readme.md)
 
 ### 3. 重复文件查找器 (Duplicate Finder)
 
