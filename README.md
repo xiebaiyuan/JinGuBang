@@ -108,5 +108,32 @@ python duplicate_finder.py /path/to/directory --debug
 - 文件被移动到回收站后，您仍然可以从系统回收站恢复它们
 - 处理大量文件时，请确保有足够的系统内存用于计算和存储文件哈希值
 
+### 4. Duplicate File Analyzer
+
+这是一个简单的重复文件分析工具，用于扫描目录并显示重复文件的信息，不进行任何删除操作。
+
+#### 使用方法
+
+```bash
+python duplicate_file_analyzer.py <目录路径> [--size]
+```
+
+#### 基本用法示例
+
+```bash
+# 分析指定目录中的重复文件
+python duplicate_file_analyzer.py /path/to/directory
+
+# 显示文件大小信息
+python duplicate_file_analyzer.py /path/to/directory --size
+```
+
+#### 特点
+
+- 仅分析和显示重复文件信息，不执行任何删除操作
+- 显示重复文件组及其哈希值
+- 可选显示文件大小和潜在的存储节省空间
+- 安全无害，适合首次扫描目录时使用
+
 ## Disclaimer: 
 These scripts is untested and provided “as is” without any warranties or guarantees of any kind. Use it at your own risk. The author assumes no responsibility for any errors, omissions, or damages resulting from the use of this script. Please exercise caution and thoroughly test the script in a safe environment before deploying it in a production setting.
