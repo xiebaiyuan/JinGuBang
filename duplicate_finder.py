@@ -289,17 +289,25 @@ def find_duplicates(directory, exclude_dirs=None, size_only=False, global_search
     duplicate_files = []
     
     for group in duplicates:
-        # 将第一个文件视为原始文件
+        # 优先保留不带重复后缀的文件作为原始文件
+        # 如果没有不带后缀的文件，则使用第一个文件
         orig_path = group[0]
+        for file_path in group:
+            filename = os.path.basename(file_path)
+            if not is_likely_duplicate_name(filename):
+                orig_path = file_path
+                break
+        
         orig_size = os.path.getsize(orig_path)
         orig_md5 = calculate_file_hash(orig_path, hash_algorithm) if not size_only else None
         original_files.append(FileInfo(orig_path, orig_size, orig_md5))
         
         # 剩余文件视为重复文件
-        for dup_path in group[1:]:
-            dup_size = os.path.getsize(dup_path)
-            dup_md5 = calculate_file_hash(dup_path, hash_algorithm) if not size_only else None
-            duplicate_files.append(FileInfo(dup_path, dup_size, dup_md5))
+        for dup_path in group:
+            if dup_path != orig_path:
+                dup_size = os.path.getsize(dup_path)
+                dup_md5 = calculate_file_hash(dup_path, hash_algorithm) if not size_only else None
+                duplicate_files.append(FileInfo(dup_path, dup_size, dup_md5))
     
     return original_files, duplicate_files
 
