@@ -5,8 +5,8 @@
 
 # 检查参数
 if [ $# -lt 4 ]; then
-    echo "用法: $0 <repo_path> <old_name> <new_name> <new_email> [additional_commit_msg]"
-    echo "示例: $0 ./myrepo \"Old Name\" \"New Name\" \"new@example.com\" \"[Updated by script]\""
+    echo "用法: $0 <repo_path> <old_name> <new_name> <new_email> [additional_commit_msg] [new_date]"
+    echo "示例: $0 ./myrepo \"Old Name\" \"New Name\" \"new@example.com\" \"[Updated by script]\" \"2023-01-01 12:00:00\""
     exit 1
 fi
 
@@ -15,6 +15,7 @@ OLD_NAME="$2"
 NEW_NAME="$3"
 NEW_EMAIL="$4"
 ADDITIONAL_MSG="${5:-}"
+NEW_DATE="${6:-}"  # 新的提交日期，格式: "YYYY-MM-DD HH:MM:SS"
 
 # 检查仓库路径是否存在
 if [ ! -d "$REPO_PATH/.git" ]; then
@@ -30,14 +31,8 @@ echo "正在创建仓库备份..."
 git clone --mirror . ../repo_backup_$(date +%s)
 echo "备份已创建在 ../repo_backup_*"
 
-# 设置环境变量用于过滤
-export OLD_NAME NEW_NAME NEW_EMAIL ADDITIONAL_MSG
-
-# 创建过滤脚本
-cat > /tmp/filter_script.sh << 'EOF'
-#!/bin/bash
-
-# 修改作者和提交者信息
+# 创建环境过滤脚本
+cat > /tmp/env_filter.sh << EOF
 if [ "$GIT_AUTHOR_NAME" = "$OLD_NAME" ]; then
     export GIT_AUTHOR_NAME="$NEW_NAME"
     export GIT_AUTHOR_EMAIL="$NEW_EMAIL"
@@ -47,6 +42,17 @@ if [ "$GIT_COMMITTER_NAME" = "$OLD_NAME" ]; then
     export GIT_COMMITTER_NAME="$NEW_NAME"
     export GIT_COMMITTER_EMAIL="$NEW_EMAIL"
 fi
+
+# 如果需要修改提交日期
+if [ -n "$NEW_DATE" ]; then
+    export GIT_AUTHOR_DATE="$NEW_DATE"
+    export GIT_COMMITTER_DATE="$NEW_DATE"
+fi
+EOF
+
+# 创建消息过滤脚本
+cat > /tmp/msg_filter.sh << 'EOF'
+#!/bin/bash
 
 # 如果需要添加额外信息到提交信息
 if [ -n "$ADDITIONAL_MSG" ]; then
@@ -62,38 +68,37 @@ else
 fi
 EOF
 
-chmod +x /tmp/filter_script.sh
+chmod +x /tmp/env_filter.sh /tmp/msg_filter.sh
 
-# 执行过滤操作
+# 构建并执行 filter-branch 命令
 echo "正在修改提交历史..."
-if [ -n "$ADDITIONAL_MSG" ]; then
-    git filter-branch --force --env-filter "
-        if [ \"\$GIT_AUTHOR_NAME\" = \"$OLD_NAME\" ]; then
-            export GIT_AUTHOR_NAME=\"$NEW_NAME\"
-            export GIT_AUTHOR_EMAIL=\"$NEW_EMAIL\"
-        fi
-        
-        if [ \"\$GIT_COMMITTER_NAME\" = \"$OLD_NAME\" ]; then
-            export GIT_COMMITTER_NAME=\"$NEW_NAME\"
-            export GIT_COMMITTER_EMAIL=\"$NEW_EMAIL\"
-        fi
-    " --msg-filter "/tmp/filter_script.sh" --tag-name-filter cat -- --all
+
+if [ -n "$ADDITIONAL_MSG" ] && [ -n "$NEW_DATE" ]; then
+    # 同时修改消息和日期
+    git filter-branch --force \
+        --env-filter "/tmp/env_filter.sh" \
+        --msg-filter "/tmp/msg_filter.sh" \
+        --tag-name-filter cat -- --all
+elif [ -n "$ADDITIONAL_MSG" ]; then
+    # 只修改消息
+    git filter-branch --force \
+        --env-filter "/tmp/env_filter.sh" \
+        --msg-filter "/tmp/msg_filter.sh" \
+        --tag-name-filter cat -- --all
+elif [ -n "$NEW_DATE" ]; then
+    # 只修改日期
+    git filter-branch --force \
+        --env-filter "/tmp/env_filter.sh" \
+        --tag-name-filter cat -- --all
 else
-    git filter-branch --force --env-filter "
-        if [ \"\$GIT_AUTHOR_NAME\" = \"$OLD_NAME\" ]; then
-            export GIT_AUTHOR_NAME=\"$NEW_NAME\"
-            export GIT_AUTHOR_EMAIL=\"$NEW_EMAIL\"
-        fi
-        
-        if [ \"\$GIT_COMMITTER_NAME\" = \"$OLD_NAME\" ]; then
-            export GIT_COMMITTER_NAME=\"$NEW_NAME\"
-            export GIT_COMMITTER_EMAIL=\"$NEW_EMAIL\"
-        fi
-    " --tag-name-filter cat -- --all
+    # 只修改作者信息
+    git filter-branch --force \
+        --env-filter "/tmp/env_filter.sh" \
+        --tag-name-filter cat -- --all
 fi
 
 # 清理临时文件
-rm -f /tmp/filter_script.sh
+rm -f /tmp/env_filter.sh /tmp/msg_filter.sh
 
 # 移除备份引用
 git for-each-ref --format="%(refname)" refs/original/ | xargs -n 1 git update-ref -d
