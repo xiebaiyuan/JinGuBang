@@ -4,6 +4,10 @@
 import os
 import sys
 import subprocess
+try:
+    from send2trash import send2trash
+except Exception:
+    send2trash = None
 import argparse
 import re
 import shutil
@@ -415,8 +419,11 @@ class BuildDirCleaner:
         # 清除进度显示
         sys.stdout.write("\r\033[K")
         sys.stdout.flush()
-        print_color(Colors.GREEN, "分析完成！")
-        
+        # 使用 send2trash 安全移动到回收站
+        if send2trash is None:
+            print_color(Colors.RED, "未检测到 send2trash 库，请先安装：pip install Send2Trash")
+            sys.exit(1)
+        send2trash(item)
         # 显示统计摘要
         self.show_final_stats()
 
@@ -592,8 +599,11 @@ class BuildDirCleaner:
                     # 如果无法获取大小，使用0
                     pass
                 
-                # 使用trash命令移动到垃圾箱
-                subprocess.run(['trash', item], stderr=subprocess.DEVNULL, check=True)
+                # 使用 send2trash 安全移动到回收站
+                if send2trash is None:
+                    print_color(Colors.RED, "未检测到 send2trash 库，请先安装：pip install Send2Trash")
+                    sys.exit(1)
+                send2trash(item)
                 log_to_file(f"成功删除项目：{item}")
                 self.success_items += 1
                 
