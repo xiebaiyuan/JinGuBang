@@ -59,6 +59,9 @@ def print_success(text):
 
 def print_table(headers, rows, column_widths=None):
     """打印格式化表格"""
+    if not rows:
+        return
+        
     if not column_widths:
         # 计算每列的最大宽度
         column_widths = [len(h) for h in headers]
@@ -75,7 +78,7 @@ def print_table(headers, rows, column_widths=None):
     print(header_line)
     
     # 打印分隔线
-    separator = "  " + "".join("-" * (sum(column_widths) + len(headers) * 2))
+    separator = "  " + "─" * (sum(column_widths) + len(headers) * 2)
     print(colorize(separator, "0;37"))
     
     # 打印数据行
@@ -366,8 +369,56 @@ def get_dependencies(file_path):
         return {'error': f'Error analyzing dependencies: {str(e)}'}
 
 def check_alignment(file_path):
-    """检查SO文件的对齐方式"""
+    """检查SO文件的对齐方式，包括ZIP对齐和LOAD段对齐"""
     try:
+        # 获取文件大小用于ZIP对齐检测
+        file_stats = os.stat(file_path)
+        file_size = file_stats.st_size
+        
+        alignment_info = {
+            'file_size': file_size,
+            'zip_alignment': {},
+            'load_alignment': {}
+        }
+        
+        # 检测ZIP对齐（Android APK中的SO文件对齐）
+        # ZIP对齐是为了优化APK中的SO文件在内存中的加载和映射
+        # 常见的对齐大小：16KB (0x4000) 或 64KB (0x10000)
+        zip_alignments = [16384, 65536]  # 16KB, 64KB
+        zip_alignment_found = False
+        for align in zip_alignments:
+            if file_size % align == 0:
+                alignment_info['zip_alignment'] = {
+                    'alignment': f'0x{align:x}',
+                    'alignment_bytes': align,
+                    'alignment_human': f'{align//1024}KB',
+                    'is_aligned': True,
+                    'purpose': 'APK压缩优化',
+                    'benefit': '减少内存映射开销'
+                }
+                zip_alignment_found = True
+                break
+        
+        if not zip_alignment_found:
+            # 找到最接近的对齐
+            min_remainder = float('inf')
+            best_align = 0
+            for align in zip_alignments:
+                remainder = file_size % align
+                if remainder < min_remainder:
+                    min_remainder = remainder
+                    best_align = align
+            alignment_info['zip_alignment'] = {
+                'alignment': f'0x{best_align:x}',
+                'alignment_bytes': best_align,
+                'alignment_human': f'{best_align//1024}KB',
+                'is_aligned': False,
+                'remainder': min_remainder,
+                'purpose': 'APK压缩优化',
+                'benefit': '减少内存映射开销',
+                'recommendation': f'建议填充 {min_remainder} 字节以达到 {best_align//1024}KB 对齐'
+            }
+        
         # 使用readelf获取段信息
         readelf_cmd = 'readelf'  # 先尝试系统自带的readelf
         objdump_cmd = 'objdump'
@@ -387,7 +438,7 @@ def check_alignment(file_path):
             result = subprocess.run([objdump_cmd, '-p', file_path], capture_output=True, text=True)
             
             if result.returncode == 0:
-                alignment_info = {'raw_info': ''}
+                alignment_info['load_alignment']['raw_info'] = ''
                 found_align = False
                 max_align = 0
                 
@@ -396,7 +447,7 @@ def check_alignment(file_path):
                     line = line.strip()
                     # 记录原始信息
                     if 'LOAD' in line:
-                        alignment_info['raw_info'] += line + '\n'
+                        alignment_info['load_alignment']['raw_info'] += line + '\n'
                         
                         # 尝试解析对齐值，格式可能是 "align 2**14" 或其他格式
                         align_match = re.search(r'align\s+2\*\*(\d+)', line)
@@ -406,24 +457,24 @@ def check_alignment(file_path):
                             # 保存最大的对齐值
                             if align_value > max_align:
                                 max_align = align_value
-                                alignment_info['alignment'] = f'0x{align_value:x}'
-                                alignment_info['alignment_bytes'] = align_value
-                                alignment_info['alignment_power'] = align_power
+                                alignment_info['load_alignment']['alignment'] = f'0x{align_value:x}'
+                                alignment_info['load_alignment']['alignment_bytes'] = align_value
+                                alignment_info['load_alignment']['alignment_power'] = align_power
                                 found_align = True
                 
                 if found_align:
                     # 添加对齐评估信息
-                    align_value = alignment_info.get('alignment_bytes', 0)
+                    align_value = alignment_info['load_alignment'].get('alignment_bytes', 0)
                     if align_value >= 65536:  # 64K对齐
-                        alignment_info['assessment'] = 'Excellent (64K alignment)'
+                        alignment_info['load_alignment']['assessment'] = 'Excellent (64K alignment)'
                     elif align_value >= 16384:  # 16K对齐
-                        alignment_info['assessment'] = 'Very Good (16K alignment)'
+                        alignment_info['load_alignment']['assessment'] = 'Very Good (16K alignment)'
                     elif align_value >= 4096:  # 4K对齐
-                        alignment_info['assessment'] = 'Good (4K alignment)'
+                        alignment_info['load_alignment']['assessment'] = 'Good (4K alignment)'
                     elif align_value >= 1024:  # 1K对齐
-                        alignment_info['assessment'] = 'Acceptable (1K alignment)'
+                        alignment_info['load_alignment']['assessment'] = 'Acceptable (1K alignment)'
                     else:
-                        alignment_info['assessment'] = f'Sub-optimal ({align_value} bytes alignment)'
+                        alignment_info['load_alignment']['assessment'] = f'Sub-optimal ({align_value} bytes alignment)'
                     
                     return alignment_info
         except Exception as e:
@@ -436,18 +487,18 @@ def check_alignment(file_path):
         if result.returncode != 0:
             # 如果readelf也失败，尝试使用file命令作为备选方案
             file_result = subprocess.run(['file', file_path], capture_output=True, text=True)
-            alignment_info = {'raw_info': file_result.stdout.strip()}
+            alignment_info['load_alignment']['file_info'] = file_result.stdout.strip()
             return alignment_info
         
         # 分析对齐信息
-        alignment_info = {'raw_info': ''}
+        alignment_info['load_alignment']['raw_info'] = ''
         found_align = False
         max_align = 0
         
         for line in result.stdout.splitlines():
             # 保存原始输出供参考
             if 'LOAD' in line:
-                alignment_info['raw_info'] += line + '\n'
+                alignment_info['load_alignment']['raw_info'] += line + '\n'
                 
                 # 尝试解析对齐值，格式可能是 "Align 0x1000" 
                 align_match = re.search(r'Align\s+(0x[0-9a-fA-F]+)', line)
@@ -457,33 +508,33 @@ def check_alignment(file_path):
                     # 保存最大的对齐值
                     if align_value > max_align:
                         max_align = align_value
-                        alignment_info['alignment'] = align_str
-                        alignment_info['alignment_bytes'] = align_value
+                        alignment_info['load_alignment']['alignment'] = align_str
+                        alignment_info['load_alignment']['alignment_bytes'] = align_value
                         found_align = True
         
         # 如果无法从readelf输出中解析对齐信息，使用启发式方法
         if not found_align:
             # 尝试从file命令获取一些信息
             file_result = subprocess.run(['file', file_path], capture_output=True, text=True)
-            alignment_info['file_info'] = file_result.stdout.strip()
+            alignment_info['load_alignment']['file_info'] = file_result.stdout.strip()
             
             # 大多数现代SO库使用4K对齐
-            alignment_info['alignment'] = '0x1000'  # 假设4K对齐
-            alignment_info['alignment_bytes'] = 4096
-            alignment_info['estimation_method'] = 'heuristic'
+            alignment_info['load_alignment']['alignment'] = '0x1000'  # 假设4K对齐
+            alignment_info['load_alignment']['alignment_bytes'] = 4096
+            alignment_info['load_alignment']['estimation_method'] = 'heuristic'
         
         # 添加对齐评估信息
-        align_value = alignment_info.get('alignment_bytes', 0)
+        align_value = alignment_info['load_alignment'].get('alignment_bytes', 0)
         if align_value >= 65536:  # 64K对齐
-            alignment_info['assessment'] = 'Excellent (64K alignment)'
+            alignment_info['load_alignment']['assessment'] = 'Excellent (64K alignment)'
         elif align_value >= 16384:  # 16K对齐
-            alignment_info['assessment'] = 'Very Good (16K alignment)'
+            alignment_info['load_alignment']['assessment'] = 'Very Good (16K alignment)'
         elif align_value >= 4096:  # 4K对齐
-            alignment_info['assessment'] = 'Good (4K alignment)'
+            alignment_info['load_alignment']['assessment'] = 'Good (4K alignment)'
         elif align_value >= 1024:  # 1K对齐
-            alignment_info['assessment'] = 'Acceptable (1K alignment)'
+            alignment_info['load_alignment']['assessment'] = 'Acceptable (1K alignment)'
         else:
-            alignment_info['assessment'] = f'Sub-optimal ({align_value} bytes alignment)'
+            alignment_info['load_alignment']['assessment'] = f'Sub-optimal ({align_value} bytes alignment)'
         
         return alignment_info
     except Exception as e:
@@ -624,6 +675,64 @@ def get_optimization_level(file_path):
     except Exception as e:
         return {'error': f'Error analyzing optimization: {str(e)}'}
 
+def align_so_file(file_path, alignment=16384, output_path=None):
+    """对齐SO文件到指定边界
+    
+    Args:
+        file_path: 原始SO文件路径
+        alignment: 对齐边界 (默认16KB)
+        output_path: 输出文件路径 (默认覆盖原文件)
+    
+    Returns:
+        dict: 对齐结果信息
+    """
+    if not os.path.exists(file_path):
+        return {'error': f'文件不存在: {file_path}'}
+    
+    if not file_path.endswith('.so'):
+        return {'error': f'不是SO文件: {file_path}'}
+    
+    # 获取原始文件大小
+    original_size = os.path.getsize(file_path)
+    
+    # 计算对齐后的文件大小
+    aligned_size = ((original_size + alignment - 1) // alignment) * alignment
+    padding_needed = aligned_size - original_size
+    
+    if padding_needed == 0:
+        return {
+            'status': 'already_aligned',
+            'original_size': original_size,
+            'alignment': alignment,
+            'message': f'文件已按 {alignment} 字节对齐'
+        }
+    
+    # 如果没有指定输出路径，使用临时文件
+    if output_path is None:
+        output_path = file_path + '.aligned'
+    
+    try:
+        # 复制文件并添加填充
+        with open(file_path, 'rb') as src:
+            with open(output_path, 'wb') as dst:
+                # 复制原始内容
+                dst.write(src.read())
+                # 添加填充 (通常填充0或NOP指令)
+                dst.write(b'\x00' * padding_needed)
+        
+        return {
+            'status': 'aligned',
+            'original_size': original_size,
+            'aligned_size': aligned_size,
+            'padding_added': padding_needed,
+            'alignment': alignment,
+            'output_path': output_path,
+            'message': f'成功对齐文件，添加了 {padding_needed} 字节填充'
+        }
+        
+    except Exception as e:
+        return {'error': f'对齐失败: {str(e)}'}
+
 def analyze_so_file(file_path):
     """全面分析SO文件"""
     if not os.path.exists(file_path):
@@ -679,15 +788,43 @@ def analyze_directory(dir_path):
     return results
 
 def main():
-    parser = argparse.ArgumentParser(description='Android SO文件分析工具')
+    parser = argparse.ArgumentParser(
+        description='Android SO文件分析工具 - 全面分析Android SO库文件',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+使用示例:
+  %(prog)s libnative.so                    # 分析单个SO文件
+  %(prog)s /path/to/libs -v                # 详细分析目录
+  %(prog)s lib.so --symbols all            # 显示所有符号
+  %(prog)s lib.so -c --no-color            # 紧凑无色输出
+  %(prog)s lib.so -o result.json           # 保存JSON结果
+  %(prog)s lib.so --align 16384            # 对齐到16KB边界
+  %(prog)s lib.so --align 65536 --align-output aligned.so  # 对齐并指定输出
+
+符号类型说明:
+  T: 导出函数    W: 弱符号    R: 只读数据
+  D: 初始化数据  B: 未初始化数据 (BSS)
+  U: 未定义符号  V: 弱对象
+        """
+    )
     parser.add_argument('path', help='SO文件或包含SO文件的目录路径')
     parser.add_argument('-o', '--output', help='输出JSON文件路径')
     parser.add_argument('-v', '--verbose', action='store_true', help='显示详细输出')
-    parser.add_argument('--show-symbols', action='store_true', help='显示符号详细信息')
-    parser.add_argument('--show-all-symbols', action='store_true', help='显示所有符号（不限制数量）')
+    parser.add_argument('-c', '--compact', action='store_true', help='紧凑输出模式')
+    parser.add_argument('--symbols', choices=['exported', 'all'], default='exported', 
+                       help='显示符号类型 (默认: exported)')
     parser.add_argument('--filter-symbol-type', help='按符号类型过滤 (例如: T, W, R, D, B, U, V)')
+    parser.add_argument('--align', type=int, choices=[4096, 8192, 16384, 32768, 65536], 
+                       help='对齐SO文件到指定边界 (字节)')
+    parser.add_argument('--align-output', help='对齐后文件输出路径')
     parser.add_argument('--max-symbols', type=int, default=20, help='最多显示的符号数量 (默认: 20)')
+    parser.add_argument('--no-color', action='store_true', help='禁用彩色输出')
     args = parser.parse_args()
+    
+    # 如果禁用颜色，覆盖colorize函数
+    if args.no_color:
+        global colorize
+        colorize = lambda text, color_code: text
     
     # 检查NDK环境变量
     if 'NDK_ROOT' not in os.environ:
@@ -695,15 +832,33 @@ def main():
     
     # 分析文件或目录
     path = os.path.abspath(args.path)
+    
+    # 处理对齐操作
+    if args.align:
+        print_header("🔧 SO文件对齐工具")
+        result = align_so_file(path, args.align, args.align_output)
+        if 'error' in result:
+            print_error(f"对齐失败: {result['error']}")
+        else:
+            print_success(result['message'])
+            print_info("原始大小", f"{result['original_size']:,} 字节")
+            print_info("对齐后大小", f"{result['aligned_size']:,} 字节")
+            if result['status'] == 'aligned':
+                print_info("填充大小", f"{result['padding_added']:,} 字节")
+            if 'output_path' in result:
+                print_info("输出文件", result['output_path'])
+        return
     if os.path.isfile(path):
-        print_header("🔍 ANDROID SO分析工具")
-        print_info("分析时间", datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-        print_info("系统环境", f"{platform.system()} {platform.release()} ({platform.machine()})")
+        if not args.compact:
+            print_header("🔍 ANDROID SO分析工具")
+            print_info("分析时间", datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+            print_info("系统环境", f"{platform.system()} {platform.release()} ({platform.machine()})")
         results = analyze_so_file(path)
     else:
-        print_header("🔍 ANDROID SO目录分析工具")
-        print_info("分析时间", datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-        print_info("系统环境", f"{platform.system()} {platform.release()} ({platform.machine()})")
+        if not args.compact:
+            print_header("🔍 ANDROID SO目录分析工具")
+            print_info("分析时间", datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+            print_info("系统环境", f"{platform.system()} {platform.release()} ({platform.machine()})")
         results = analyze_directory(path)
     
     # 输出结果
@@ -717,11 +872,13 @@ def main():
             print_error(f"错误: {results['error']}")
         elif 'summary' in results:
             # 目录分析摘要
-            print_header("📁 目录分析摘要")
+            if not args.compact:
+                print_header("📁 目录分析摘要")
             print_info("目录路径", results['summary']['directory'])
             print_info("SO文件数量", str(results['summary']['total_so_files']))
             
-            print_subheader("📋 SO文件列表")
+            if not args.compact:
+                print_subheader("📋 SO文件列表")
             for idx, so_file in enumerate(results['summary']['so_files'], 1):
                 rel_path = os.path.relpath(so_file, path)
                 so_info = results[rel_path]
@@ -731,7 +888,10 @@ def main():
                     arch = so_info['architecture'].get('architecture', 'unknown')
                     size = so_info['basic_info']['file_size']['human_readable']
                     deps = so_info['dependencies'].get('total_dependencies', 0)
-                    print_info(f"{idx}. {rel_path}", f"{arch}, {size}, 依赖: {deps}个库", "0;36")
+                    if args.compact:
+                        print_info(f"{idx}. {rel_path}", f"{arch}, {size}, 依赖:{deps}", "0;36")
+                    else:
+                        print_info(f"{idx}. {rel_path}", f"{arch}, {size}, 依赖: {deps}个库", "0;36")
         else:
             # 单文件分析摘要
             basic_info = results['basic_info']
@@ -744,15 +904,15 @@ def main():
             print_header("📊 SO文件分析报告")
             
             # 基本信息部分
-            print_subheader("📌 基本信息")
+            if not args.compact:
+                print_subheader("📌 基本信息")
             print_info("文件名称", basic_info['file_name'])
-            print_info("文件路径", basic_info['file_path'])
             print_info("文件大小", basic_info['file_size']['human_readable'])
-            print_info("修改时间", basic_info['modified_time'])
             print_info("架构类型", arch_info.get('architecture', 'unknown'))
             
             # 哈希值部分
-            print_subheader("🔐 哈希值")
+            if not args.compact:
+                print_subheader("🔐 哈希值")
             print_info("MD5", basic_info['md5'])
             print_info("SHA1", basic_info['sha1'])
             print_info("SHA256", basic_info['sha256'][:32] + "...")
@@ -790,90 +950,149 @@ def main():
                             stat['description']
                         ])
                     print_table(headers, rows)
-                    
-                    # 如果用户请求显示详细符号信息
-                    if args.show_symbols or args.show_all_symbols:
-                        print_subheader("🔍 详细符号列表")
-                        # 默认显示导出符号
-                        symbols_to_show = symbols_info['exported_symbols']
-                        print_info("显示类型", "导出符号", "1;33")
-                        
-                        if args.show_all_symbols and args.verbose:
-                            # 如果用户请求显示所有符号且处于详细模式
-                            symbols_to_show = symbols_info['symbols']
+                
+                # 如果用户请求显示详细符号信息
+                if (args.symbols in ['exported', 'all'] or args.filter_symbol_type) and not args.compact:
+                    print_subheader("🔍 详细符号列表")
+                elif (args.symbols in ['exported', 'all'] or args.filter_symbol_type) and args.compact:
+                    print_info("符号详情", "显示中...")
+                
+                if args.symbols in ['exported', 'all'] or args.filter_symbol_type:
+                    # 根据参数选择显示的符号
+                    if args.symbols == 'all':
+                        symbols_to_show = symbols_info['symbols']
+                        if not args.compact:
                             print_info("显示类型", "所有符号")
-                        
-                        if args.filter_symbol_type:
+                    else:
+                        symbols_to_show = symbols_info['exported_symbols']
+                        if not args.compact:
+                            print_info("显示类型", "导出符号", "1;33")
+                    
+                    if args.filter_symbol_type:
+                        if not args.compact:
                             print_info("过滤类型", f"{args.filter_symbol_type} - {get_symbol_type_description(args.filter_symbol_type)}")
-                        
-                        # 显示符号列表
-                        print_symbol_details(
-                            symbols_to_show, 
-                            max_symbols=args.max_symbols,
-                            filter_type=args.filter_symbol_type,
-                            show_all=args.show_all_symbols
-                        )
+                    
+                    # 显示符号列表
+                    show_all = (args.symbols == 'all' and not args.filter_symbol_type) or (args.max_symbols is None)
+                    print_symbol_details(
+                        symbols_to_show, 
+                        max_symbols=None if show_all else args.max_symbols,
+                        filter_type=args.filter_symbol_type,
+                        show_all=show_all
+                    )
             
             # 依赖库部分
-            print_subheader("🔗 依赖库")
+            if not args.compact:
+                print_subheader("🔗 依赖库")
             if 'error' in deps_info:
                 print_error(f"依赖分析失败: {deps_info['error']}")
             else:
                 deps_count = deps_info.get('total_dependencies', 0)
                 print_info("依赖库数量", str(deps_count))
                 if deps_count > 0:
-                    for idx, dep in enumerate(deps_info.get('dependencies', []), 1):
-                        print_info(f"  {idx}.", dep)
+                    if args.compact:
+                        # 紧凑模式：一行显示所有依赖
+                        deps_list = deps_info.get('dependencies', [])
+                        print_info("依赖列表", ", ".join(deps_list))
+                    else:
+                        for idx, dep in enumerate(deps_info.get('dependencies', []), 1):
+                            print_info(f"  {idx}.", dep)
             
             # 对齐信息部分
             print_subheader("📏 对齐信息")
             if 'error' in align_info:
                 print_error(f"对齐分析失败: {align_info['error']}")
             else:
-                align_value = align_info.get('alignment', 'unknown')
-                align_bytes = align_info.get('alignment_bytes', 'unknown')
-                align_power = align_info.get('alignment_power', None)
-                assess = align_info.get('assessment', 'unknown')
+                # ZIP对齐信息
+                zip_align = align_info.get('zip_alignment', {})
+                if zip_align:
+                    zip_status = "✅ 已对齐" if zip_align.get('is_aligned', False) else "❌ 未对齐"
+                    zip_value = zip_align.get('alignment_human', 'unknown')
+                    print_info("ZIP对齐", f"{zip_value} {zip_status}", "1;32" if zip_align.get('is_aligned', False) else "1;31")
+                    
+                    if not args.compact:
+                        purpose = zip_align.get('purpose', '')
+                        benefit = zip_align.get('benefit', '')
+                        if purpose:
+                            print_info("对齐目的", purpose, "0;36")
+                        if benefit:
+                            print_info("性能益处", benefit, "0;36")
+                    
+                    if not zip_align.get('is_aligned', False) and 'remainder' in zip_align:
+                        remainder_kb = zip_align['remainder'] / 1024
+                        print_info("偏移量", f"{remainder_kb:.1f} KB", "1;33")
+                        if not args.compact and 'recommendation' in zip_align:
+                            print_info("修复建议", zip_align['recommendation'], "1;33")
                 
-                if align_bytes != 'unknown':
-                    if align_power:
-                        print_info("对齐值", f"{align_value} (2^{align_power} = {align_bytes} 字节)")
+                # LOAD段对齐信息
+                load_align = align_info.get('load_alignment', {})
+                if load_align:
+                    load_value = load_align.get('alignment', 'unknown')
+                    load_bytes = load_align.get('alignment_bytes', 'unknown')
+                    load_power = load_align.get('alignment_power', None)
+                    assess = load_align.get('assessment', 'unknown')
+                    
+                    if load_bytes != 'unknown':
+                        if load_power:
+                            print_info("LOAD段对齐", f"{load_value} (2^{load_power} = {load_bytes} 字节)")
+                        else:
+                            print_info("LOAD段对齐", f"{load_value} ({load_bytes} 字节)")
                     else:
-                        print_info("对齐值", f"{align_value} ({align_bytes} 字节)")
+                        print_info("LOAD段对齐", load_value)
+                        
+                    # 根据评估结果选择颜色
+                    color = "0;32"  # 默认绿色
+                    if "Excellent" in assess:
+                        color = "1;32"  # 亮绿色
+                    elif "Very Good" in assess:
+                        color = "0;32"  # 绿色
+                    elif "Good" in assess:
+                        color = "0;36"  # 青色
+                    elif "Acceptable" in assess:
+                        color = "1;33"  # 亮黄色
+                    elif "Sub-optimal" in assess:
+                        color = "1;31"  # 亮红色
+                        
+                    print_info("对齐评估", assess, color)
+                
+                # 综合建议
+                zip_aligned = align_info.get('zip_alignment', {}).get('is_aligned', False)
+                load_assess = align_info.get('load_alignment', {}).get('assessment', '')
+                if zip_aligned and "Excellent" in load_assess:
+                    print_info("综合评估", "完美对齐 (ZIP + LOAD)", "1;32")
+                elif zip_aligned:
+                    print_info("综合评估", "ZIP对齐良好", "0;32")
                 else:
-                    print_info("对齐值", align_value)
-                    
-                # 根据评估结果选择颜色
-                color = "0;32"  # 默认绿色
-                if "Excellent" in assess:
-                    color = "1;32"  # 亮绿色
-                elif "Very Good" in assess:
-                    color = "0;32"  # 绿色
-                elif "Good" in assess:
-                    color = "0;36"  # 青色
-                elif "Acceptable" in assess:
-                    color = "1;33"  # 亮黄色
-                elif "Sub-optimal" in assess:
-                    color = "1;31"  # 亮红色
-                    
-                print_info("对齐评估", assess, color)
+                    print_info("综合评估", "建议重新对齐", "1;33")
             
             # 优化信息部分
-            print_subheader("⚙️ 优化信息")
+            if not args.compact:
+                print_subheader("⚙️ 优化信息")
             if 'error' in opt_info:
                 print_error(f"优化分析失败: {opt_info['error']}")
             else:
-                print_info("优化级别", opt_info.get('optimization_level', 'unknown'))
-                print_info("包含调试信息", "是" if opt_info.get('has_debug_info', False) else "否")
-                print_info("已剥离符号", "是" if opt_info.get('is_stripped', False) else "否")
+                opt_level = opt_info.get('optimization_level', 'unknown')
+                has_debug = opt_info.get('has_debug_info', False)
+                is_stripped = opt_info.get('is_stripped', False)
+                
+                if args.compact:
+                    debug_str = "有调试" if has_debug else "无调试"
+                    stripped_str = "已剥离" if is_stripped else "未剥离"
+                    print_info("优化状态", f"{opt_level}, {debug_str}, {stripped_str}")
+                else:
+                    print_info("优化级别", opt_level)
+                    print_info("包含调试信息", "是" if has_debug else "否")
+                    print_info("已剥离符号", "是" if is_stripped else "否")
             
             # 提示信息
-            print("\n提示:")
-            print(f"  使用 -o 参数保存完整JSON结果")
-            print(f"  使用 --show-symbols 查看导出符号详情")
-            print(f"  使用 --filter-symbol-type T 只查看导出函数")
-            print(f"  使用 --max-symbols 50 设置显示的符号数量")
-            print(f"  使用 --show-all-symbols 显示所有符号")
+            if not args.compact:
+                print("\n提示:")
+                print(f"  使用 -o 参数保存完整JSON结果")
+                print(f"  使用 --symbols all 查看所有符号详情")
+                print(f"  使用 --filter-symbol-type T 只查看导出函数")
+                print(f"  使用 --max-symbols 50 设置显示的符号数量")
+                print(f"  使用 -c 使用紧凑输出模式")
+                print(f"  使用 --no-color 禁用彩色输出")
 
 if __name__ == "__main__":
     main()
