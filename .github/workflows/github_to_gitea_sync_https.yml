@@ -16,7 +16,7 @@ jobs:
           # GitHub到Gitea的映射配置
           - { 
               src: "github/xiebaiyuan", 
-              dst: "gitea/xiebaiyuan",  # 格式固定为：gitea/用户名
+              dst: "gitee/xiebaiyuan",  # 使用github作为平台类型
               account_type: "user",
               static_list: ""  # 留空表示同步所有仓库
             }
@@ -32,8 +32,8 @@ jobs:
       - name: Mirror repository from GitHub to Gitea (HTTPS方式)
         uses: Yikun/hub-mirror-action@master
         env:
-          # 只有服务器URL是真正需要保护的敏感信息
-          GITEA_HOSTNAME: "${{ secrets.GITEA_SERVER_URL }}"  # 例如: https://code.aa.com:8443
+          # 对于Gitea，需要使用GITHUB_HOSTNAME而不是GITEA_HOSTNAME
+          GITHUB_HOSTNAME: "${{ secrets.GITEA_SERVER_URL }}"  # 例如: https://code.aa.com:8443
         with:
           src: ${{ matrix.repo.src }}
           dst: ${{ matrix.repo.dst }}
