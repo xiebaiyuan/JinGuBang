@@ -7,7 +7,7 @@ FAILED=()
 SKIPPED=()
 
 # 获取未归档的 fork 仓库
-repos=$(gh repo list $USER --fork --json name,isArchived -q '.[] | select(.isArchived == false) | .name')
+repos=$(gh repo list $USER --fork --limit 1000 --json name,isArchived -q '.[] | select(.isArchived == false) | .name')
 
 for repo in $repos; do
     # 检查是否在排除名单
