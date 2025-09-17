@@ -7,8 +7,11 @@ Android SO文件分析工具
 - SO库架构信息
 - 导出符号表
 - 依赖的其他库
-- 对齐方式
+- 对齐方式（支持16KB对齐检测）
 - ELF头信息
+- 哈希样式（GNU Hash/SysV Hash）
+- 重定位表压缩（Android Pack Relocations）
+- NDK版本分析（通过Clang版本推断）
 """
 
 import os
@@ -636,6 +639,354 @@ def get_section_info(file_path):
     except Exception as e:
         return {'error': f'Error analyzing sections: {str(e)}'}
 
+def check_hash_style(file_path):
+    """检查SO文件使用的哈希样式（GNU Hash或SysV Hash）
+    
+    哈希表是ELF文件中用于符号查找的数据结构。有两种主要类型：
+    1. SysV Hash（.hash节）：传统哈希表，兼容所有Android版本
+    2. GNU Hash（.gnu.hash节）：更高效的哈希表，但需要Android 6.0+
+    
+    不同的链接标志会影响哈希表的生成：
+    - --hash-style=sysv：只生成SysV哈希表
+    - --hash-style=gnu：只生成GNU哈希表
+    - --hash-style=both：同时生成两种哈希表（兼容性好但文件更大）
+    
+    Returns:
+        dict: 哈希样式分析结果
+    """
+    try:
+        # 获取readelf命令
+        ndk_root = os.environ.get('NDK_ROOT')
+        if not ndk_root:
+            readelf_cmd = 'readelf'
+        else:
+            readelf_cmd = os.path.join(ndk_root, 'toolchains', 'llvm', 'prebuilt', 'darwin-x86_64', 'bin', 'llvm-readelf')
+            if not os.path.exists(readelf_cmd):
+                readelf_cmd = 'readelf'
+        
+        # 使用readelf -S检查节区名称
+        result = subprocess.run([readelf_cmd, '-S', file_path], capture_output=True, text=True)
+        
+        if result.returncode != 0:
+            return {'error': f'Error analyzing hash style: {result.stderr}'}
+        
+        # 检查是否存在.gnu.hash和.hash节
+        has_gnu_hash = '.gnu.hash' in result.stdout
+        has_sysv_hash = '.hash' in result.stdout
+        
+        # 分析哈希样式
+        if has_gnu_hash and has_sysv_hash:
+            hash_style = 'both'
+            compatibility = 'all'
+            description = '同时使用GNU和SysV哈希表 (兼容所有Android版本)'
+            recommendation = '如果最小SDK ≥ 23 (Android 6.0)，可使用 --hash-style=gnu 减小文件大小'
+            link_flag = '-Wl,--hash-style=both'
+        elif has_gnu_hash:
+            hash_style = 'gnu'
+            compatibility = '≥23 (Android 6.0+)'
+            description = '仅使用GNU哈希表 (Android 6.0+)'
+            recommendation = '如果需要支持Android 5.x，需改用 --hash-style=both'
+            link_flag = '-Wl,--hash-style=gnu'
+        elif has_sysv_hash:
+            hash_style = 'sysv'
+            compatibility = 'all'
+            description = '仅使用SysV哈希表 (传统格式)'
+            recommendation = '如果最小SDK ≥ 23 (Android 6.0)，建议使用 --hash-style=gnu 减小文件大小'
+            link_flag = '-Wl,--hash-style=sysv'
+        else:
+            hash_style = 'unknown'
+            compatibility = 'unknown'
+            description = '未检测到哈希表'
+            recommendation = '检查文件是否为有效的共享库'
+            link_flag = 'unknown'
+        
+        return {
+            'hash_style': hash_style,
+            'compatibility': compatibility,
+            'description': description,
+            'recommendation': recommendation,
+            'has_gnu_hash': has_gnu_hash,
+            'has_sysv_hash': has_sysv_hash,
+            'link_flag': link_flag,
+            'sdk_impact': '哈希样式影响SO库大小和符号查找性能'
+        }
+    except Exception as e:
+        return {'error': f'Error analyzing hash style: {str(e)}'}
+
+def check_relocation_packing(file_path):
+    """检查SO文件是否使用了重定位表压缩
+    
+    重定位表压缩（--pack-dyn-relocs=android）是一种减小SO库大小的技术：
+    1. 传统：使用.rel.dyn或.rela.dyn节
+    2. 压缩：使用Android格式的压缩重定位表，节约空间
+    
+    注意：压缩重定位表要求minSdk ≥ 23 (Android 6.0+)
+    
+    Returns:
+        dict: 重定位表分析结果
+    """
+    try:
+        # 获取readelf命令
+        ndk_root = os.environ.get('NDK_ROOT')
+        if not ndk_root:
+            readelf_cmd = 'readelf'
+        else:
+            readelf_cmd = os.path.join(ndk_root, 'toolchains', 'llvm', 'prebuilt', 'darwin-x86_64', 'bin', 'llvm-readelf')
+            if not os.path.exists(readelf_cmd):
+                readelf_cmd = 'readelf'
+        
+        # 使用readelf -S检查节区名称
+        result = subprocess.run([readelf_cmd, '-S', file_path], capture_output=True, text=True)
+        
+        if result.returncode != 0:
+            return {'error': f'Error analyzing relocation packing: {result.stderr}'}
+        
+        # Android重定位表压缩使用.relr.dyn节
+        has_relr = '.relr.dyn' in result.stdout
+        
+        # 传统重定位表使用.rel.dyn或.rela.dyn
+        has_traditional_rel = '.rel.dyn' in result.stdout
+        has_traditional_rela = '.rela.dyn' in result.stdout
+        
+        # 获取重定位表大小
+        section_info = get_section_info(file_path)
+        rel_size = 0
+        relr_size = 0
+        
+        if 'section_sizes' in section_info:
+            for section_name, size_info in section_info['section_sizes'].items():
+                if section_name in ['.rel.dyn', '.rela.dyn']:
+                    rel_size += size_info.get('size_bytes', 0)
+                elif section_name == '.relr.dyn':
+                    relr_size = size_info.get('size_bytes', 0)
+        
+        # 分析重定位表压缩状态
+        if has_relr:
+            reloc_packing = 'android'
+            compatibility = '≥23 (Android 6.0+)'
+            description = '使用了Android重定位表压缩'
+            recommendation = '保持现状，已使用优化'
+            link_flag = '-Wl,--pack-dyn-relocs=android'
+        elif has_traditional_rel or has_traditional_rela:
+            reloc_packing = 'none'
+            compatibility = 'all'
+            description = '使用传统重定位表'
+            recommendation = '如果minSdk ≥ 23 (Android 6.0)，建议使用 --pack-dyn-relocs=android 减小文件大小'
+            link_flag = '未使用 --pack-dyn-relocs=android'
+        else:
+            reloc_packing = 'unknown'
+            compatibility = 'unknown'
+            description = '未检测到重定位表'
+            recommendation = '检查文件是否为有效的共享库'
+            link_flag = 'unknown'
+        
+        return {
+            'relocation_packing': reloc_packing,
+            'compatibility': compatibility,
+            'description': description,
+            'recommendation': recommendation,
+            'has_relr': has_relr,
+            'has_traditional_rel': has_traditional_rel or has_traditional_rela,
+            'rel_size': rel_size,
+            'relr_size': relr_size,
+            'link_flag': link_flag,
+            'potential_savings': '对于大型SO库，压缩重定位表可减小数百KB大小'
+        }
+    except Exception as e:
+        return {'error': f'Error analyzing relocation packing: {str(e)}'}
+
+def analyze_clang_ndk_version(file_path):
+    """分析SO文件中的Clang版本信息并推断NDK版本
+    
+    方法：
+    1. 使用strings工具提取SO文件中的字符串
+    2. 查找Clang版本信息（如"clang version X.Y.Z"）
+    3. 查找NDK相关信息
+    4. 根据已知的Clang/NDK版本映射关系推断NDK版本
+    
+    Returns:
+        dict: Clang和NDK版本分析结果
+    """
+    # NDK版本与Clang版本的映射关系
+    # 来源: https://developer.android.com/ndk/guides/other_build_systems
+    NDK_CLANG_MAPPING = {
+        # NDK版本: [clang版本, llvm版本]
+        "r27": ["18.1.0", "18.1.0"],
+        "r26": ["17.0.2", "17.0.6"],
+        "r25": ["14.0.7", "14.0.1"],
+        "r24": ["14.0.1", "14.0.1"],
+        "r23": ["12.0.9", "12.0.9"],
+        "r22": ["11.0.5", "11.0.5"],
+        "r21": ["9.0.9", "9.0.9"],
+        "r20": ["8.0.7", "8.0.7"],
+        "r19": ["7.0.2", "7.0.2"],
+        "r18": ["6.0.2", "6.0.2"],
+        "r17": ["6.0.2", "6.0.2"],
+        "r16": ["5.0.300080", "5.0.300080"],
+        "r15": ["5.0.300080", "5.0.300080"],
+        "r14": ["4.0.0", "4.0.0"],
+        "r13": ["3.8.275480", "3.8.275480"],
+        "r12": ["3.8.256229", "3.8.256229"],
+    }
+    
+    try:
+        # 提取SO文件中的字符串
+        result = subprocess.run(['strings', file_path], capture_output=True, text=True)
+        
+        if result.returncode != 0:
+            return {'error': f'Error extracting strings from file: {result.stderr}'}
+        
+        content = result.stdout
+        
+        # 初始化结果
+        version_info = {
+            'clang_version': 'unknown',
+            'clang_version_full': 'unknown',
+            'ndk_version': 'unknown',
+            'ndk_version_certainty': 'unknown',
+            'detection_method': 'unknown',
+            'clang_indicators': [],
+            'ndk_indicators': []
+        }
+        
+        # 1. 直接查找NDK版本标识
+        ndk_direct_patterns = [
+            r'Android NDK ([a-z][0-9]+[a-z]?)',
+            r'NDK ([a-z][0-9]+[a-z]?)',
+            r'android-ndk-([a-z][0-9]+[a-z]?)'
+        ]
+        
+        for pattern in ndk_direct_patterns:
+            matches = re.findall(pattern, content, re.IGNORECASE)
+            if matches:
+                version_info['ndk_version'] = matches[0]
+                version_info['ndk_version_certainty'] = 'high'
+                version_info['detection_method'] = 'direct'
+                version_info['ndk_indicators'].append(f'Found direct NDK version: {matches[0]}')
+                break
+        
+        # 2. 查找Clang版本
+        clang_patterns = [
+            r'clang version ([0-9]+\.[0-9]+\.[0-9]+)',
+            r'clang-([0-9]+\.[0-9]+\.[0-9]+)'
+        ]
+        
+        clang_version = None
+        clang_version_full = None
+        
+        for pattern in clang_patterns:
+            matches = re.findall(pattern, content, re.IGNORECASE)
+            if matches:
+                clang_version = matches[0]
+                # 查找完整的clang版本行
+                for line in content.splitlines():
+                    if f'clang version {clang_version}' in line:
+                        clang_version_full = line.strip()
+                        break
+                version_info['clang_version'] = clang_version
+                version_info['clang_version_full'] = clang_version_full or f'clang version {clang_version}'
+                version_info['clang_indicators'].append(f'Found Clang version: {clang_version}')
+                break
+        
+        # 如果找不到Clang版本，尝试匹配LLVM版本
+        if not clang_version:
+            llvm_patterns = [
+                r'LLVM version ([0-9]+\.[0-9]+\.[0-9]+)',
+                r'libLLVM-([0-9]+\.[0-9]+\.[0-9]+)'
+            ]
+            
+            for pattern in llvm_patterns:
+                matches = re.findall(pattern, content, re.IGNORECASE)
+                if matches:
+                    llvm_version = matches[0]
+                    version_info['llvm_version'] = llvm_version
+                    version_info['clang_indicators'].append(f'Found LLVM version: {llvm_version}')
+                    # 通常Clang和LLVM版本是对应的
+                    if not clang_version:
+                        clang_version = llvm_version
+                        version_info['clang_version'] = clang_version
+                        version_info['clang_version_full'] = f'inferred from LLVM {llvm_version}'
+                    break
+        
+        # 3. 根据Clang版本推断NDK版本
+        if clang_version and version_info['ndk_version'] == 'unknown':
+            closest_ndk = None
+            closest_diff = float('inf')
+            
+            clang_version_parts = [int(part) for part in clang_version.split('.')]
+            
+            for ndk, versions in NDK_CLANG_MAPPING.items():
+                clang_ref = versions[0]
+                clang_ref_parts = [int(part) for part in clang_ref.split('.')]
+                
+                # 计算版本差异（只比较主要和次要版本号）
+                diff = abs(clang_version_parts[0] - clang_ref_parts[0]) * 100
+                if len(clang_version_parts) > 1 and len(clang_ref_parts) > 1:
+                    diff += abs(clang_version_parts[1] - clang_ref_parts[1])
+                
+                if diff < closest_diff:
+                    closest_diff = diff
+                    closest_ndk = ndk
+            
+            if closest_ndk:
+                version_info['ndk_version'] = closest_ndk
+                
+                # 确定可信度
+                if closest_diff == 0:
+                    version_info['ndk_version_certainty'] = 'high'
+                elif closest_diff < 5:
+                    version_info['ndk_version_certainty'] = 'medium'
+                else:
+                    version_info['ndk_version_certainty'] = 'low'
+                
+                version_info['detection_method'] = 'clang_inference'
+                version_info['ndk_indicators'].append(
+                    f'Inferred from Clang {clang_version} (maps to NDK {closest_ndk}, certainty: {version_info["ndk_version_certainty"]})'
+                )
+        
+        # 4. 查找Android API级别
+        api_patterns = [
+            r'__ANDROID_API__=([0-9]+)',
+            r'android-([0-9]+)'
+        ]
+        
+        for pattern in api_patterns:
+            matches = re.findall(pattern, content)
+            if matches:
+                version_info['android_api_level'] = matches[0]
+                version_info['ndk_indicators'].append(f'Found Android API level: {matches[0]}')
+                break
+        
+        # 5. 检查NDK的建议版本（根据当前日期）
+        current_date = datetime.now()
+        if current_date.year >= 2024:
+            recommended_ndk = "r27"
+            recommended_reason = "最新稳定版本 (2024年推荐版本)"
+        elif current_date.year >= 2023:
+            recommended_ndk = "r26"
+            recommended_reason = "2023年推荐版本"
+        else:
+            recommended_ndk = "r25"
+            recommended_reason = "稳定长期支持版本"
+        
+        # 添加推荐信息
+        version_info['recommended_ndk'] = recommended_ndk
+        version_info['recommended_reason'] = recommended_reason
+        
+        # 如果检测到的NDK版本小于推荐版本，添加升级建议
+        if version_info['ndk_version'] != 'unknown' and version_info['ndk_version'] < recommended_ndk:
+            version_info['upgrade_recommendation'] = f"建议升级到NDK {recommended_ndk} ({recommended_reason})"
+        
+        # 添加NDK映射表的引用（供参考）
+        version_info['ndk_clang_reference'] = {
+            "reference": "NDK与Clang版本对应关系",
+            "mapping": NDK_CLANG_MAPPING
+        }
+        
+        return version_info
+    except Exception as e:
+        return {'error': f'Error analyzing Clang/NDK version: {str(e)}'}
+
 def get_optimization_level(file_path):
     """尝试检测SO文件的优化级别"""
     try:
@@ -750,7 +1101,10 @@ def analyze_so_file(file_path):
         'alignment': check_alignment(file_path),
         'elf_header': get_elf_header_info(file_path),
         'section_info': get_section_info(file_path),
-        'optimization': get_optimization_level(file_path)
+        'optimization': get_optimization_level(file_path),
+        'hash_style': check_hash_style(file_path),               # 新增：哈希样式分析
+        'relocation_packing': check_relocation_packing(file_path), # 新增：重定位表压缩分析
+        'ndk_version': analyze_clang_ndk_version(file_path)      # 新增：NDK版本分析
     }
     
     return results
@@ -805,6 +1159,15 @@ def main():
   T: 导出函数    W: 弱符号    R: 只读数据
   D: 初始化数据  B: 未初始化数据 (BSS)
   U: 未定义符号  V: 弱对象
+
+哈希样式说明:
+  gnu: 仅GNU哈希表 (Android 6.0+，更小更快)
+  sysv: 仅SysV哈希表 (兼容所有Android版本)
+  both: 同时使用两种哈希表 (兼容所有版本但更大)
+
+重定位表压缩说明:
+  android: 使用Android压缩格式 (Android 6.0+，可减小几百KB)
+  none: 使用传统重定位表 (兼容所有Android版本)
         """
     )
     parser.add_argument('path', help='SO文件或包含SO文件的目录路径')
@@ -1084,6 +1447,137 @@ def main():
                     print_info("包含调试信息", "是" if has_debug else "否")
                     print_info("已剥离符号", "是" if is_stripped else "否")
             
+            # 哈希样式部分（新增）
+            hash_info = results.get('hash_style', {})
+            print_subheader("🔄 哈希样式 (Hash Style)")
+            if 'error' in hash_info:
+                print_error(f"哈希样式分析失败: {hash_info['error']}")
+            else:
+                hash_style = hash_info.get('hash_style', 'unknown')
+                compatibility = hash_info.get('compatibility', 'unknown')
+                description = hash_info.get('description', '')
+                
+                # 选择合适的颜色
+                hash_color = "0;32"  # 默认绿色
+                if hash_style == 'gnu':
+                    hash_color = "1;32"  # 亮绿色（最优）
+                elif hash_style == 'both':
+                    hash_color = "1;33"  # 亮黄色（兼容但不是最优）
+                elif hash_style == 'sysv':
+                    hash_color = "1;31"  # 亮红色（不是最优）
+                
+                print_info("哈希样式", hash_style, hash_color)
+                print_info("兼容性", f"Android API {compatibility}")
+                print_info("描述", description)
+                
+                if not args.compact:
+                    if 'recommendation' in hash_info:
+                        print_info("建议", hash_info['recommendation'], "1;36")
+                    if 'link_flag' in hash_info:
+                        print_info("链接标志", hash_info['link_flag'], "0;36")
+            
+            # 重定位表压缩部分（新增）
+            reloc_info = results.get('relocation_packing', {})
+            print_subheader("📦 重定位表压缩 (Relocation Packing)")
+            if 'error' in reloc_info:
+                print_error(f"重定位表分析失败: {reloc_info['error']}")
+            else:
+                reloc_packing = reloc_info.get('relocation_packing', 'unknown')
+                compatibility = reloc_info.get('compatibility', 'unknown')
+                description = reloc_info.get('description', '')
+                
+                # 选择合适的颜色
+                reloc_color = "0;32"  # 默认绿色
+                if reloc_packing == 'android':
+                    reloc_color = "1;32"  # 亮绿色（最优）
+                elif reloc_packing == 'none':
+                    reloc_color = "1;31"  # 亮红色（不是最优）
+                
+                print_info("重定位压缩", reloc_packing, reloc_color)
+                print_info("兼容性", f"Android API {compatibility}")
+                print_info("描述", description)
+                
+                # 显示重定位表大小（如果有）
+                rel_size = reloc_info.get('rel_size', 0)
+                relr_size = reloc_info.get('relr_size', 0)
+                if rel_size or relr_size:
+                    if rel_size > 0:
+                        print_info("传统重定位表大小", format_size(rel_size))
+                    if relr_size > 0:
+                        print_info("压缩重定位表大小", format_size(relr_size))
+                
+                if not args.compact:
+                    if 'recommendation' in reloc_info:
+                        print_info("建议", reloc_info['recommendation'], "1;36")
+                    if 'link_flag' in reloc_info:
+                        print_info("链接标志", reloc_info['link_flag'], "0;36")
+            
+            # NDK版本分析部分（新增）
+            ndk_info = results.get('ndk_version', {})
+            print_subheader("🛠️ NDK版本分析")
+            if 'error' in ndk_info:
+                print_error(f"NDK版本分析失败: {ndk_info['error']}")
+            else:
+                ndk_version = ndk_info.get('ndk_version', 'unknown')
+                ndk_certainty = ndk_info.get('ndk_version_certainty', 'unknown')
+                clang_version = ndk_info.get('clang_version', 'unknown')
+                clang_version_full = ndk_info.get('clang_version_full', '')
+                detection_method = ndk_info.get('detection_method', '')
+                
+                # 选择合适的颜色
+                certainty_color = "0;32"  # 默认绿色
+                if ndk_certainty == 'high':
+                    certainty_color = "1;32"  # 亮绿色（高可信度）
+                elif ndk_certainty == 'medium':
+                    certainty_color = "1;33"  # 亮黄色（中等可信度）
+                elif ndk_certainty == 'low':
+                    certainty_color = "1;31"  # 亮红色（低可信度）
+                
+                print_info("检测到的NDK版本", ndk_version, certainty_color)
+                if ndk_certainty != 'unknown':
+                    print_info("可信度", ndk_certainty, certainty_color)
+                
+                if clang_version != 'unknown':
+                    print_info("Clang版本", clang_version)
+                    if not args.compact and clang_version_full:
+                        print_info("Clang详细信息", clang_version_full, "0;36")
+                
+                # 显示API级别
+                if 'android_api_level' in ndk_info:
+                    print_info("Android API级别", ndk_info['android_api_level'])
+                
+                # 推荐信息
+                if 'recommended_ndk' in ndk_info:
+                    recommended_ndk = ndk_info['recommended_ndk']
+                    recommended_reason = ndk_info.get('recommended_reason', '')
+                    
+                    # 当前NDK是否为推荐版本
+                    if ndk_version == recommended_ndk:
+                        print_info("NDK版本状态", f"当前版本 ({recommended_ndk}) 已是推荐版本", "1;32")
+                    else:
+                        print_info("推荐NDK版本", recommended_ndk, "1;36")
+                        if recommended_reason:
+                            print_info("推荐原因", recommended_reason, "0;36")
+                
+                # 显示升级建议
+                if 'upgrade_recommendation' in ndk_info:
+                    print_info("升级建议", ndk_info['upgrade_recommendation'], "1;33")
+                
+                # 显示推断过程的更多信息（详细模式）
+                if args.verbose:
+                    # 显示推断过程的指标
+                    indicators = ndk_info.get('ndk_indicators', [])
+                    if indicators:
+                        print_info("NDK版本检测指标", '')
+                        for idx, indicator in enumerate(indicators, 1):
+                            print(f"    {idx}. {indicator}")
+                    
+                    clang_indicators = ndk_info.get('clang_indicators', [])
+                    if clang_indicators:
+                        print_info("Clang版本检测指标", '')
+                        for idx, indicator in enumerate(clang_indicators, 1):
+                            print(f"    {idx}. {indicator}")
+            
             # 提示信息
             if not args.compact:
                 print("\n提示:")
@@ -1093,6 +1587,7 @@ def main():
                 print(f"  使用 --max-symbols 50 设置显示的符号数量")
                 print(f"  使用 -c 使用紧凑输出模式")
                 print(f"  使用 --no-color 禁用彩色输出")
+                print(f"  使用 -v 显示更详细的分析信息")
 
 if __name__ == "__main__":
     main()
