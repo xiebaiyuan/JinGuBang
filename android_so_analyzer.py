@@ -230,6 +230,7 @@ def check_enhanced_relocation_packing(file_path):
             parts = line.split()
             if len(parts) >= 8:
                 section_name = parts[2]  # 节名称在索引2
+                section_type = parts[3]  # 节类型在索引3
                 if ('rel' in section_name.lower() or 'android' in section_name.lower()):
                     try:
                         # Size 字段在第6个位置，EntrySize 在第7个位置
@@ -243,6 +244,7 @@ def check_enhanced_relocation_packing(file_path):
                             count = size // entry_size
                             relocation_sections.append({
                                 'name': section_name,
+                                'type': section_type,
                                 'size': size,
                                 'entry_size': entry_size,
                                 'count': count
@@ -250,10 +252,11 @@ def check_enhanced_relocation_packing(file_path):
                     except (ValueError, IndexError):
                         continue
         
-        # 分析重定位表类型
+        # 分析重定位表类型 - 更新识别逻辑，检查节类型而不只是节名称
         has_relr = any('.relr.dyn' in sec['name'] for sec in relocation_sections)
-        has_android_rel = any('android.rel' in sec['name'] for sec in relocation_sections)
-        has_traditional_rel = any(sec['name'] in ['.rel.dyn', '.rel.plt', '.rela.dyn', '.rela.plt'] for sec in relocation_sections)
+        has_android_rel = any('android.rel' in sec['name'] or 'ANDROID_REL' in sec.get('type', '') for sec in relocation_sections)
+        has_traditional_rel = any(sec['name'] in ['.rel.dyn', '.rel.plt', '.rela.dyn', '.rela.plt'] and 
+                                'ANDROID_REL' not in sec.get('type', '') for sec in relocation_sections)
         
         # 计算总体积和条目数
         total_size = sum(sec['size'] for sec in relocation_sections)
@@ -305,46 +308,81 @@ def check_16kb_alignment(file_path):
     Android 15 (API 35) 引入了16KB页面支持，需要SO文件满足：
     1. 所有可加载段的虚拟地址必须16KB对齐
     2. 文件偏移量必须16KB对齐
+    3. 段对齐属性必须是16KB（2^14）
     """
     try:
-        # 使用NDK的llvm-readelf获取程序头信息
-        readelf_cmd = get_readelf_command()
-        result = subprocess.run([readelf_cmd, '-l', file_path], capture_output=True, text=True)
+        # 使用NDK的llvm-objdump获取程序头信息（更准确的对齐信息）
+        ndk_root = os.environ.get('NDK_ROOT')
+        objdump_cmd = 'objdump'
+        
+        if ndk_root:
+            # 检测系统架构
+            system = platform.system().lower()
+            if system == 'darwin':
+                arch = 'darwin-x86_64'
+            elif system == 'linux':
+                arch = 'linux-x86_64'
+            elif system == 'windows':
+                arch = 'windows-x86_64'
+            else:
+                arch = 'linux-x86_64'  # 默认
+                
+            ndk_objdump = os.path.join(ndk_root, 'toolchains', 'llvm', 'prebuilt', arch, 'bin', 'llvm-objdump')
+            if os.path.exists(ndk_objdump):
+                objdump_cmd = ndk_objdump
+        
+        result = subprocess.run([objdump_cmd, '-p', file_path], capture_output=True, text=True)
         if result.returncode != 0:
-            return {'error': f'{readelf_cmd} failed: {result.stderr}'}
+            return {'error': f'{objdump_cmd} failed: {result.stderr}'}
         
         lines = result.stdout.split('\n')
         segments = []
         
-        # 解析LOAD段
+        # 解析LOAD段，objdump格式：LOAD off 0x0000000000000000 vaddr 0x0000000000000000 paddr 0x0000000000000000 align 2**14
         for line in lines:
-            if 'LOAD' in line:
-                parts = line.split()
-                if len(parts) >= 6:
-                    try:
-                        offset = int(parts[1], 16)
-                        vaddr = int(parts[2], 16)
+            if 'LOAD' in line and 'off' in line and 'vaddr' in line:
+                try:
+                    # 提取 off, vaddr, align 信息
+                    off_match = re.search(r'off\s+0x([0-9a-fA-F]+)', line)
+                    vaddr_match = re.search(r'vaddr\s+0x([0-9a-fA-F]+)', line)
+                    align_match = re.search(r'align\s+2\*\*(\d+)', line)
+                    
+                    if off_match and vaddr_match and align_match:
+                        offset = int(off_match.group(1), 16)
+                        vaddr = int(vaddr_match.group(1), 16)
+                        align_power = int(align_match.group(1))
+                        alignment = 2 ** align_power
+                        
                         segments.append({
                             'offset': offset,
                             'vaddr': vaddr,
+                            'alignment': alignment,
                             'offset_16kb_aligned': (offset % 16384) == 0,
-                            'vaddr_16kb_aligned': (vaddr % 16384) == 0
+                            'vaddr_16kb_aligned': (vaddr % 16384) == 0,
+                            'alignment_16kb': alignment >= 16384,
+                            'align_power': align_power
                         })
-                    except (ValueError, IndexError):
-                        continue
+                except (ValueError, AttributeError):
+                    continue
         
         # 检查对齐情况
         all_offset_aligned = all(seg['offset_16kb_aligned'] for seg in segments)
         all_vaddr_aligned = all(seg['vaddr_16kb_aligned'] for seg in segments)
+        all_alignment_ok = all(seg['alignment_16kb'] for seg in segments)
+        
+        # 综合判断：段对齐属性是16KB就认为支持16KB页面
+        supports_16kb = all_alignment_ok
         
         return {
-            'supports_16kb': all_offset_aligned and all_vaddr_aligned,
+            'supports_16kb': supports_16kb,
             'total_segments': len(segments),
             'offset_aligned_count': sum(1 for seg in segments if seg['offset_16kb_aligned']),
             'vaddr_aligned_count': sum(1 for seg in segments if seg['vaddr_16kb_aligned']),
+            'alignment_ok_count': sum(1 for seg in segments if seg['alignment_16kb']),
             'segments': segments,
-            'recommendation': '支持16KB页面，兼容Android 15+' if all_offset_aligned and all_vaddr_aligned 
-                           else '不支持16KB页面，需要使用-Wl,-z,max-page-size=16384重新链接'
+            'recommendation': '支持16KB页面，兼容Android 15+' if supports_16kb 
+                           else '不支持16KB页面，需要使用-Wl,-z,max-page-size=16384重新链接',
+            'objdump_command': objdump_cmd
         }
     except Exception as e:
         return {'error': f'Error checking 16KB alignment: {str(e)}'}
@@ -721,6 +759,29 @@ def analyze_so_file(file_path):
         print_info("总段数", str(alignment_result['total_segments']))
         print_info("偏移对齐段数", f"{alignment_result['offset_aligned_count']}/{alignment_result['total_segments']}")
         print_info("虚拟地址对齐段数", f"{alignment_result['vaddr_aligned_count']}/{alignment_result['total_segments']}")
+        print_info("对齐属性16KB段数", f"{alignment_result['alignment_ok_count']}/{alignment_result['total_segments']}")
+        print_info("使用工具", alignment_result.get('objdump_command', 'objdump'), "0;36")
+        
+        # 显示段详情
+        if alignment_result['segments']:
+            print("\n  " + colorize("LOAD段详情:", "1;37"))
+            headers = ["段号", "文件偏移", "虚拟地址", "对齐属性", "16KB对齐"]
+            rows = []
+            for i, seg in enumerate(alignment_result['segments'], 1):
+                offset_aligned = "✅" if seg['offset_16kb_aligned'] else "❌"
+                vaddr_aligned = "✅" if seg['vaddr_16kb_aligned'] else "❌"
+                alignment_ok = "✅" if seg['alignment_16kb'] else "❌"
+                overall_ok = "✅" if seg['alignment_16kb'] else "❌"  # 主要看对齐属性
+                
+                rows.append([
+                    str(i),
+                    f"0x{seg['offset']:08x} {offset_aligned}",
+                    f"0x{seg['vaddr']:08x} {vaddr_aligned}",
+                    f"2^{seg['align_power']} ({seg['alignment']}) {alignment_ok}",
+                    overall_ok
+                ])
+            print_table(headers, rows)
+        
         print_info("建议", alignment_result['recommendation'], "1;33")
     
     # 2. 哈希样式分析
@@ -767,11 +828,12 @@ def analyze_so_file(file_path):
         # 显示重定位表节详情
         if reloc_result['relocation_sections']:
             print("\n  " + colorize("检测到的重定位表节:", "1;37"))
-            headers = ["节名称", "大小", "条目大小", "条目数"]
+            headers = ["节名称", "节类型", "大小", "条目大小", "条目数"]
             rows = []
             for sec in reloc_result['relocation_sections']:
                 rows.append([
                     sec['name'],
+                    sec.get('type', 'UNKNOWN'),
                     f"{sec['size']} bytes",
                     f"{sec['entry_size']} bytes",
                     str(sec['count'])
