@@ -760,13 +760,16 @@ def analyze_so_file(file_path):
     print_info("文件路径", file_path)
     print_info("分析时间", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     
+    # 基础信息
+    file_size = os.path.getsize(file_path)
+    print_info("文件大小", f"{file_size:,} 字节 ({format_size(file_size)})", "0;32")
+    
     # 使用的工具信息
     readelf_cmd = get_readelf_command()
     print_info("使用工具", readelf_cmd, "0;36")
     
-    # 基础信息
-    file_size = os.path.getsize(file_path)
-    print_info("文件大小", f"{file_size:,} 字节 ({format_size(file_size)})", "0;32")
+    print(colorize("\n" + "🔍 " + "开始详细分析...", "1;36"))
+    print(colorize("=" * 60, "0;37"))
     
     # 1. 16KB页面对齐检查
     print_subheader("16KB页面对齐检查")
@@ -785,6 +788,23 @@ def analyze_so_file(file_path):
         print_info("虚拟地址对齐段数", f"{alignment_result['vaddr_aligned_count']}/{alignment_result['total_segments']}")
         print_info("对齐属性16KB段数", f"{alignment_result['alignment_ok_count']}/{alignment_result['total_segments']}")
         print_info("使用工具", alignment_result.get('objdump_command', 'objdump'), "0;36")
+        
+        # 显示实际的objdump输出
+        print("\n  " + colorize("实际的LOAD段信息:", "1;37"))
+        try:
+            objdump_cmd = alignment_result.get('objdump_command', 'objdump')
+            result = subprocess.run([objdump_cmd, '-p', file_path], capture_output=True, text=True)
+            if result.returncode == 0:
+                lines = result.stdout.split('\n')
+                for line in lines:
+                    if 'LOAD' in line and 'off' in line and 'vaddr' in line:
+                        # 检查对齐属性
+                        if '2**14' in line:  # 16KB对齐
+                            print(f"    ✅ {line.strip()}")
+                        else:
+                            print(f"    ❌ {line.strip()}")
+        except Exception as e:
+            print(f"    ⚠️ 无法获取LOAD段详情: {e}")
         
         # 显示段详情
         if alignment_result['segments']:
@@ -822,6 +842,26 @@ def analyze_so_file(file_path):
         else:
             print_error(f"未检测到哈希表")
         
+        # 显示检测到的具体节信息
+        print("\n  " + colorize("检测到的哈希表节:", "1;37"))
+        readelf_cmd = get_readelf_command()
+        try:
+            result = subprocess.run([readelf_cmd, '-S', file_path], capture_output=True, text=True)
+            if result.returncode == 0:
+                lines = result.stdout.splitlines()
+                found_hash_sections = False
+                for line in lines:
+                    if '.hash' in line or '.gnu.hash' in line:
+                        if '.gnu.hash' in line:
+                            print(f"    ✅ {line.strip()}")
+                        else:
+                            print(f"    📝 {line.strip()}")
+                        found_hash_sections = True
+                if not found_hash_sections:
+                    print("    ❌ 未找到哈希表节")
+        except Exception as e:
+            print(f"    ⚠️ 无法获取节详情: {e}")
+        
         # 显示详细大小信息
         if hash_result['hash_size'] is not None:
             print_info(".hash 大小", f"{hash_result['hash_size']} bytes")
@@ -849,9 +889,32 @@ def analyze_so_file(file_path):
         else:
             print_info("状态", "未检测到重定位表")
         
+        # 显示检测到的具体重定位表节
+        print("\n  " + colorize("检测到的重定位表节:", "1;37"))
+        readelf_cmd = get_readelf_command()
+        try:
+            result = subprocess.run([readelf_cmd, '-S', file_path], capture_output=True, text=True)
+            if result.returncode == 0:
+                lines = result.stdout.splitlines()
+                found_reloc_sections = False
+                for line in lines:
+                    line_lower = line.lower()
+                    if ('rela.dyn' in line_lower or 'rel.dyn' in line_lower or 
+                        'rela.plt' in line_lower or 'rel.plt' in line_lower or
+                        'android.rel' in line_lower):
+                        if 'ANDROID_REL' in line:
+                            print(f"    ✅ {line.strip()}")
+                        else:
+                            print(f"    ❌ {line.strip()}")
+                        found_reloc_sections = True
+                if not found_reloc_sections:
+                    print("    ⚠️ 未找到重定位表节")
+        except Exception as e:
+            print(f"    ⚠️ 无法获取节详情: {e}")
+        
         # 显示重定位表节详情
         if reloc_result['relocation_sections']:
-            print("\n  " + colorize("检测到的重定位表节:", "1;37"))
+            print("\n  " + colorize("重定位表统计信息:", "1;37"))
             headers = ["节名称", "节类型", "大小", "条目大小", "条目数"]
             rows = []
             for sec in reloc_result['relocation_sections']:
@@ -917,6 +980,57 @@ def analyze_so_file(file_path):
     
     # 总结和建议
     print_header("分析总结")
+    
+    # 添加类似 check_android_so.py 的状态汇总
+    print_subheader("📊 配置状态汇总")
+    
+    # 16KB对齐状态
+    if not alignment_result.get('error'):
+        if alignment_result.get('supports_16kb'):
+            print("   ✅ 16KB页面对齐: 已支持")
+        else:
+            print("   ❌ 16KB页面对齐: 未支持")
+    else:
+        print("   ⚠️ 16KB页面对齐: 检测失败")
+    
+    # Hash格式状态
+    if not hash_result.get('error'):
+        if hash_result.get('hash_style') == 'gnu':
+            print("   ✅ -Wl,--hash-style=gnu: 已生效")
+        else:
+            print("   ❌ -Wl,--hash-style=gnu: 未生效")
+    else:
+        print("   ⚠️ -Wl,--hash-style=gnu: 检测失败")
+    
+    # 重定位压缩状态
+    if not reloc_result.get('error'):
+        if reloc_result.get('relocation_packing') == 'android':
+            print("   ✅ -Wl,--pack-dyn-relocs=android: 已生效")
+        else:
+            print("   ❌ -Wl,--pack-dyn-relocs=android: 未生效")
+    else:
+        print("   ⚠️ -Wl,--pack-dyn-relocs=android: 检测失败")
+    
+    # NDK版本状态
+    if not ndk_result.get('error'):
+        ndk_ver = ndk_result.get('ndk_version', 'unknown')
+        if ndk_ver != 'unknown':
+            try:
+                main_version = int(ndk_ver[1:].rstrip('abcd'))
+                if main_version >= 27:
+                    print(f"   ✅ NDK版本: {ndk_ver} (较新)")
+                elif main_version >= 25:
+                    print(f"   ⚠️ NDK版本: {ndk_ver} (可升级)")
+                else:
+                    print(f"   ❌ NDK版本: {ndk_ver} (需升级)")
+            except:
+                print(f"   ⚠️ NDK版本: {ndk_ver} (未知状态)")
+        else:
+            print("   ❌ NDK版本: 无法检测")
+    else:
+        print("   ⚠️ NDK版本: 检测失败")
+    
+    print("")
     
     issues = []
     recommendations = []
