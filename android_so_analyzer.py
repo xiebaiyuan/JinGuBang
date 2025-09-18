@@ -175,7 +175,12 @@ def check_enhanced_hash_style(file_path):
             size_diff = gnu_hash_size - hash_size
         
         # 确定哈希样式
-        if gnu_hash_size is not None:
+        if gnu_hash_size is not None and hash_size is not None:
+            style = 'both'
+            description = f'同时使用GNU Hash和SysV Hash (--hash-style=both)'
+            compatibility = '兼容所有Android版本但文件体积较大'
+            recommendation = '建议仅使用GNU Hash：-Wl,--hash-style=gnu'
+        elif gnu_hash_size is not None:
             style = 'gnu'
             description = f'使用GNU Hash，符号查找速度更快'
             compatibility = '需要Android 5.0+ (API 21+)'
@@ -837,6 +842,8 @@ def analyze_so_file(file_path):
         hash_style = hash_result['hash_style'].upper()
         if hash_style == 'GNU':
             print_success(f"使用GNU Hash格式 (推荐)")
+        elif hash_style == 'BOTH':
+            print_warning(f"同时使用GNU Hash和SysV Hash (--hash-style=both)")
         elif hash_style == 'SYSV':
             print_warning(f"使用传统SysV Hash格式")
         else:
@@ -855,7 +862,10 @@ def analyze_so_file(file_path):
                         if '.gnu.hash' in line:
                             print(f"    ✅ {line.strip()}")
                         else:
-                            print(f"    📝 {line.strip()}")
+                            if hash_style == 'BOTH':
+                                print(f"    ⚠️ {line.strip()}")  # 当同时存在时，.hash应该显示为警告
+                            else:
+                                print(f"    📝 {line.strip()}")
                         found_hash_sections = True
                 if not found_hash_sections:
                     print("    ❌ 未找到哈希表节")
@@ -997,6 +1007,8 @@ def analyze_so_file(file_path):
     if not hash_result.get('error'):
         if hash_result.get('hash_style') == 'gnu':
             print("   ✅ -Wl,--hash-style=gnu: 已生效")
+        elif hash_result.get('hash_style') == 'both':
+            print("   ⚠️ -Wl,--hash-style=gnu: 部分生效 (同时存在两种哈希表)")
         else:
             print("   ❌ -Wl,--hash-style=gnu: 未生效")
     else:
@@ -1040,8 +1052,11 @@ def analyze_so_file(file_path):
         issues.append("不支持16KB页面对齐")
         recommendations.append("添加链接参数: -Wl,-z,max-page-size=16384")
     
-    if not hash_result.get('error') and hash_result.get('hash_style') == 'sysv':
-        issues.append("使用传统SysV Hash")
+    if not hash_result.get('error') and hash_result.get('hash_style') in ['sysv', 'both']:
+        if hash_result.get('hash_style') == 'sysv':
+            issues.append("使用传统SysV Hash")
+        else:  # both
+            issues.append("同时使用GNU Hash和SysV Hash")
         recommendations.append("启用GNU Hash: -Wl,--hash-style=gnu")
     
     if not reloc_result.get('error') and reloc_result.get('relocation_packing') == 'none':
