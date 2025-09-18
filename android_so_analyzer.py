@@ -3,16 +3,33 @@
 """
 Android SO文件分析工具
 用于全面分析Android SO库文件的各项信息，包括：
-- 文件基本信息（大小、哈希值等）
-- SO库架构信息
-- 导出符号表
-- 依赖的其他库
-- 对齐方式
-- ELF头信息
-- 16KB页面对齐检查
-- GNU Hash分析  
+
+基本信息分析：
+- 文件大小、修改时间、访问时间、创建时间
+- MD5、SHA1、SHA256哈希值
+- 文件类型和权限信息
+
+ELF结构分析：
+- ELF文件头信息（架构、字节序、类型等）
+- 节（Section）信息统计和分类
+- 程序段（Program Header）信息
+
+符号和依赖分析：
+- 导出符号表（函数、对象、弱符号）
+- 未定义符号（外部依赖）
+- 依赖的共享库列表
+- SONAME、RPATH、RUNPATH信息
+
+Android优化检查：
+- 16KB页面对齐检查（Android 15+兼容性）
+- GNU Hash vs SysV Hash分析
 - 重定位表压缩分析
 - NDK版本检测（通过Clang版本推断）
+
+性能优化建议：
+- 提供具体的链接器参数建议
+- 兼容性和性能权衡分析
+- 验证命令生成
 """
 
 import os
@@ -104,6 +121,329 @@ def format_size(size_bytes):
         return f"{size_bytes / (1024 * 1024):.1f} MB"
     else:
         return f"{size_bytes / (1024 * 1024 * 1024):.1f} GB"
+
+def calculate_file_hashes(file_path):
+    """计算文件的MD5、SHA1和SHA256哈希值"""
+    try:
+        md5_hash = hashlib.md5()
+        sha1_hash = hashlib.sha1()
+        sha256_hash = hashlib.sha256()
+        
+        with open(file_path, 'rb') as f:
+            # 分块读取文件以处理大文件
+            for chunk in iter(lambda: f.read(4096), b""):
+                md5_hash.update(chunk)
+                sha1_hash.update(chunk)
+                sha256_hash.update(chunk)
+        
+        return {
+            'md5': md5_hash.hexdigest(),
+            'sha1': sha1_hash.hexdigest(),
+            'sha256': sha256_hash.hexdigest()
+        }
+    except Exception as e:
+        return {'error': f'Error calculating hashes: {str(e)}'}
+
+def get_file_basic_info(file_path):
+    """获取文件基本信息，包括大小、修改时间、哈希值等"""
+    try:
+        stat = os.stat(file_path)
+        file_size = stat.st_size
+        
+        # 获取文件时间信息
+        modification_time = datetime.fromtimestamp(stat.st_mtime)
+        access_time = datetime.fromtimestamp(stat.st_atime)
+        creation_time = datetime.fromtimestamp(stat.st_ctime)
+        
+        # 计算哈希值
+        hashes = calculate_file_hashes(file_path)
+        
+        # 获取文件权限
+        permissions = oct(stat.st_mode)[-3:]
+        
+        # 判断文件类型
+        try:
+            result = subprocess.run(['file', file_path], capture_output=True, text=True)
+            file_type = result.stdout.split(':', 1)[1].strip() if result.returncode == 0 else 'Unknown'
+        except:
+            file_type = 'Unknown'
+        
+        return {
+            'size_bytes': file_size,
+            'size_formatted': format_size(file_size),
+            'modification_time': modification_time,
+            'access_time': access_time,
+            'creation_time': creation_time,
+            'permissions': permissions,
+            'file_type': file_type,
+            'hashes': hashes
+        }
+    except Exception as e:
+        return {'error': f'Error getting file info: {str(e)}'}
+
+def analyze_elf_header(file_path):
+    """分析ELF文件头信息"""
+    try:
+        readelf_cmd = get_readelf_command()
+        result = subprocess.run([readelf_cmd, '-h', file_path], capture_output=True, text=True)
+        if result.returncode != 0:
+            return {'error': f'{readelf_cmd} -h failed: {result.stderr}'}
+        
+        lines = result.stdout.split('\n')
+        elf_info = {}
+        
+        for line in lines:
+            line = line.strip()
+            if ':' in line:
+                key, value = line.split(':', 1)
+                key = key.strip()
+                value = value.strip()
+                
+                if 'Class' in key:
+                    elf_info['class'] = value
+                elif 'Data' in key:
+                    elf_info['endianness'] = value
+                elif 'Type' in key:
+                    elf_info['type'] = value
+                elif 'Machine' in key:
+                    elf_info['machine'] = value
+                elif 'Version' in key:
+                    elf_info['version'] = value
+                elif 'Entry point address' in key:
+                    elf_info['entry_point'] = value
+                elif 'Start of program headers' in key:
+                    elf_info['program_header_offset'] = value
+                elif 'Start of section headers' in key:
+                    elf_info['section_header_offset'] = value
+                elif 'Size of this header' in key:
+                    elf_info['header_size'] = value
+                elif 'Size of program headers' in key:
+                    elf_info['program_header_size'] = value
+                elif 'Number of program headers' in key:
+                    elf_info['program_header_count'] = value
+                elif 'Size of section headers' in key:
+                    elf_info['section_header_size'] = value
+                elif 'Number of section headers' in key:
+                    elf_info['section_header_count'] = value
+                elif 'Section header string table index' in key:
+                    elf_info['string_table_index'] = value
+        
+        return elf_info
+    except Exception as e:
+        return {'error': f'Error analyzing ELF header: {str(e)}'}
+
+def analyze_dependencies(file_path):
+    """分析SO文件的依赖库"""
+    try:
+        readelf_cmd = get_readelf_command()
+        result = subprocess.run([readelf_cmd, '-d', file_path], capture_output=True, text=True)
+        if result.returncode != 0:
+            return {'error': f'{readelf_cmd} -d failed: {result.stderr}'}
+        
+        lines = result.stdout.split('\n')
+        dependencies = {
+            'needed_libraries': [],
+            'soname': None,
+            'rpath': [],
+            'runpath': [],
+            'other_entries': []
+        }
+        
+        for line in lines:
+            line = line.strip()
+            if 'NEEDED' in line and 'Shared library:' in line:
+                # 提取库名
+                lib_match = re.search(r'\[([^\]]+)\]', line)
+                if lib_match:
+                    dependencies['needed_libraries'].append(lib_match.group(1))
+            elif 'SONAME' in line and 'Library soname:' in line:
+                # 提取SONAME
+                soname_match = re.search(r'\[([^\]]+)\]', line)
+                if soname_match:
+                    dependencies['soname'] = soname_match.group(1)
+            elif 'RPATH' in line and 'Library rpath:' in line:
+                # 提取RPATH
+                rpath_match = re.search(r'\[([^\]]+)\]', line)
+                if rpath_match:
+                    dependencies['rpath'].append(rpath_match.group(1))
+            elif 'RUNPATH' in line and 'Library runpath:' in line:
+                # 提取RUNPATH
+                runpath_match = re.search(r'\[([^\]]+)\]', line)
+                if runpath_match:
+                    dependencies['runpath'].append(runpath_match.group(1))
+            elif line.startswith('0x') and 'Tag' not in line:
+                # 其他动态段条目
+                dependencies['other_entries'].append(line)
+        
+        return dependencies
+    except Exception as e:
+        return {'error': f'Error analyzing dependencies: {str(e)}'}
+
+def analyze_exported_symbols(file_path, max_symbols=50):
+    """分析SO文件的导出符号"""
+    try:
+        readelf_cmd = get_readelf_command()
+        result = subprocess.run([readelf_cmd, '-Ws', file_path], capture_output=True, text=True)
+        if result.returncode != 0:
+            return {'error': f'{readelf_cmd} -Ws failed: {result.stderr}'}
+        
+        lines = result.stdout.split('\n')
+        symbols = {
+            'exported_functions': [],
+            'exported_objects': [],
+            'weak_symbols': [],
+            'undefined_symbols': [],
+            'total_symbols': 0
+        }
+        
+        # 跳过表头
+        in_symbol_table = False
+        for line in lines:
+            line = line.strip()
+            
+            if 'Symbol table' in line:
+                in_symbol_table = True
+                continue
+            
+            if not in_symbol_table or not line or line.startswith('Num'):
+                continue
+            
+            # 解析符号表行
+            parts = line.split()
+            if len(parts) >= 8:
+                try:
+                    # readelf输出格式: Num Value Size Type Bind Vis Ndx Name
+                    num = parts[0].rstrip(':')
+                    value = parts[1]
+                    size = parts[2]
+                    sym_type = parts[3]
+                    bind = parts[4]
+                    vis = parts[5]
+                    ndx = parts[6]
+                    name = ' '.join(parts[7:]) if len(parts) > 7 else ''
+                    
+                    symbols['total_symbols'] += 1
+                    
+                    # 过滤掉空名称和特殊符号
+                    if not name or name in ['', '_start', '_init', '_fini']:
+                        continue
+                    
+                    symbol_info = {
+                        'name': name,
+                        'type': sym_type,
+                        'bind': bind,
+                        'visibility': vis,
+                        'size': size,
+                        'value': value,
+                        'section': ndx
+                    }
+                    
+                    # 分类符号
+                    if ndx == 'UND':
+                        symbols['undefined_symbols'].append(symbol_info)
+                    elif bind == 'WEAK':
+                        symbols['weak_symbols'].append(symbol_info)
+                    elif sym_type == 'FUNC' and bind in ['GLOBAL', 'LOCAL']:
+                        symbols['exported_functions'].append(symbol_info)
+                    elif sym_type == 'OBJECT' and bind in ['GLOBAL', 'LOCAL']:
+                        symbols['exported_objects'].append(symbol_info)
+                        
+                except (ValueError, IndexError):
+                    continue
+        
+        # 限制显示的符号数量
+        for key in ['exported_functions', 'exported_objects', 'weak_symbols', 'undefined_symbols']:
+            if len(symbols[key]) > max_symbols:
+                symbols[key] = symbols[key][:max_symbols]
+                symbols[f'{key}_truncated'] = True
+        
+        return symbols
+    except Exception as e:
+        return {'error': f'Error analyzing exported symbols: {str(e)}'}
+
+def analyze_sections_info(file_path):
+    """分析SO文件的节信息统计"""
+    try:
+        readelf_cmd = get_readelf_command()
+        result = subprocess.run([readelf_cmd, '-S', file_path], capture_output=True, text=True)
+        if result.returncode != 0:
+            return {'error': f'{readelf_cmd} -S failed: {result.stderr}'}
+        
+        lines = result.stdout.split('\n')
+        sections = {
+            'total_sections': 0,
+            'code_sections': [],
+            'data_sections': [],
+            'other_sections': [],
+            'total_size': 0
+        }
+        
+        important_sections = {
+            '.text': 'Code section',
+            '.data': 'Initialized data',
+            '.bss': 'Uninitialized data',
+            '.rodata': 'Read-only data',
+            '.init': 'Initialization code',
+            '.fini': 'Finalization code',
+            '.plt': 'Procedure linkage table',
+            '.got': 'Global offset table',
+            '.dynamic': 'Dynamic linking info',
+            '.dynsym': 'Dynamic symbol table',
+            '.dynstr': 'Dynamic string table',
+            '.rel.dyn': 'Dynamic relocations',
+            '.rel.plt': 'PLT relocations',
+            '.rela.dyn': 'Dynamic relocations (with addends)',
+            '.rela.plt': 'PLT relocations (with addends)',
+            '.hash': 'Symbol hash table',
+            '.gnu.hash': 'GNU-style hash table',
+            '.note.android.ident': 'Android identification',
+            '.ARM.exidx': 'ARM exception index',
+            '.ARM.extab': 'ARM exception table'
+        }
+        
+        for line in lines:
+            line = line.strip()
+            if not line or not line.startswith('['):
+                continue
+            
+            # 解析节表行
+            parts = line.split()
+            if len(parts) >= 7:
+                try:
+                    section_name = parts[2]
+                    section_type = parts[3]
+                    size_hex = parts[6]
+                    size = int(size_hex, 16)
+                    
+                    sections['total_sections'] += 1
+                    sections['total_size'] += size
+                    
+                    section_info = {
+                        'name': section_name,
+                        'type': section_type,
+                        'size': size,
+                        'size_formatted': format_size(size),
+                        'description': important_sections.get(section_name, 'Unknown section')
+                    }
+                    
+                    # 分类节
+                    if any(x in section_name.lower() for x in ['.text', '.init', '.fini', '.plt']):
+                        sections['code_sections'].append(section_info)
+                    elif any(x in section_name.lower() for x in ['.data', '.bss', '.rodata', '.got']):
+                        sections['data_sections'].append(section_info)
+                    else:
+                        sections['other_sections'].append(section_info)
+                        
+                except (ValueError, IndexError):
+                    continue
+        
+        # 按大小排序
+        for key in ['code_sections', 'data_sections', 'other_sections']:
+            sections[key].sort(key=lambda x: x['size'], reverse=True)
+        
+        return sections
+    except Exception as e:
+        return {'error': f'Error analyzing sections: {str(e)}'}
 
 def get_readelf_command():
     """获取readelf命令路径，优先使用NDK中的llvm-readelf"""
@@ -765,16 +1105,160 @@ def analyze_so_file(file_path):
     print_info("文件路径", file_path)
     print_info("分析时间", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     
-    # 基础信息
-    file_size = os.path.getsize(file_path)
-    print_info("文件大小", f"{file_size:,} 字节 ({format_size(file_size)})", "0;32")
-    
     # 使用的工具信息
     readelf_cmd = get_readelf_command()
     print_info("使用工具", readelf_cmd, "0;36")
     
     print(colorize("\n" + "🔍 " + "开始详细分析...", "1;36"))
     print(colorize("=" * 60, "0;37"))
+    
+    # 0. 文件基本信息
+    print_subheader("文件基本信息")
+    basic_info = get_file_basic_info(file_path)
+    if 'error' in basic_info:
+        print_error(f"获取文件信息失败: {basic_info['error']}")
+    else:
+        print_info("文件大小", f"{basic_info['size_bytes']:,} 字节 ({basic_info['size_formatted']})", "0;32")
+        print_info("文件类型", basic_info['file_type'], "0;36")
+        print_info("文件权限", basic_info['permissions'], "0;37")
+        print_info("修改时间", basic_info['modification_time'].strftime("%Y-%m-%d %H:%M:%S"))
+        print_info("访问时间", basic_info['access_time'].strftime("%Y-%m-%d %H:%M:%S"))
+        print_info("创建时间", basic_info['creation_time'].strftime("%Y-%m-%d %H:%M:%S"))
+        
+        # 哈希值信息
+        if 'error' not in basic_info['hashes']:
+            print("\n  " + colorize("文件哈希值:", "1;37"))
+            print_info("MD5", basic_info['hashes']['md5'], "0;35")
+            print_info("SHA1", basic_info['hashes']['sha1'], "0;35")
+            print_info("SHA256", basic_info['hashes']['sha256'], "0;35")
+        else:
+            print_warning(f"哈希计算失败: {basic_info['hashes']['error']}")
+    
+    # 0.1 ELF头信息
+    print_subheader("ELF文件头信息")
+    elf_header = analyze_elf_header(file_path)
+    if 'error' in elf_header:
+        print_error(f"ELF头分析失败: {elf_header['error']}")
+    else:
+        print_info("文件类别", elf_header.get('class', 'Unknown'), "0;32")
+        print_info("字节序", elf_header.get('endianness', 'Unknown'), "0;32")
+        print_info("文件类型", elf_header.get('type', 'Unknown'), "0;32")
+        print_info("目标架构", elf_header.get('machine', 'Unknown'), "0;32")
+        print_info("版本", elf_header.get('version', 'Unknown'), "0;37")
+        print_info("入口点地址", elf_header.get('entry_point', 'Unknown'), "0;36")
+        print_info("程序头偏移", elf_header.get('program_header_offset', 'Unknown'), "0;37")
+        print_info("节头偏移", elf_header.get('section_header_offset', 'Unknown'), "0;37")
+        print_info("程序头数量", elf_header.get('program_header_count', 'Unknown'), "0;36")
+        print_info("节头数量", elf_header.get('section_header_count', 'Unknown'), "0;36")
+    
+    # 0.2 依赖库分析
+    print_subheader("依赖库分析")
+    dependencies = analyze_dependencies(file_path)
+    if 'error' in dependencies:
+        print_error(f"依赖库分析失败: {dependencies['error']}")
+    else:
+        if dependencies['soname']:
+            print_info("SO名称", dependencies['soname'], "0;32")
+        
+        if dependencies['needed_libraries']:
+            print_info("依赖库数量", str(len(dependencies['needed_libraries'])), "0;36")
+            print("\n  " + colorize("依赖的共享库:", "1;37"))
+            for i, lib in enumerate(dependencies['needed_libraries'], 1):
+                print(f"    {i:2d}. {lib}")
+        else:
+            print_info("依赖库", "无外部依赖", "0;32")
+        
+        if dependencies['rpath']:
+            print("\n  " + colorize("RPATH路径:", "1;37"))
+            for path in dependencies['rpath']:
+                print(f"    • {path}")
+        
+        if dependencies['runpath']:
+            print("\n  " + colorize("RUNPATH路径:", "1;37"))
+            for path in dependencies['runpath']:
+                print(f"    • {path}")
+    
+    # 0.3 导出符号分析
+    print_subheader("导出符号分析")
+    symbols = analyze_exported_symbols(file_path)
+    if 'error' in symbols:
+        print_error(f"符号分析失败: {symbols['error']}")
+    else:
+        print_info("总符号数", str(symbols['total_symbols']), "0;36")
+        print_info("导出函数", str(len(symbols['exported_functions'])), "0;32")
+        print_info("导出对象", str(len(symbols['exported_objects'])), "0;32")
+        print_info("弱符号", str(len(symbols['weak_symbols'])), "0;33")
+        print_info("未定义符号", str(len(symbols['undefined_symbols'])), "0;31")
+        
+        # 显示主要导出函数
+        if symbols['exported_functions']:
+            print("\n  " + colorize("主要导出函数 (按大小排序):", "1;37"))
+            # 去重并按大小排序
+            unique_functions = {}
+            for func in symbols['exported_functions']:
+                name = func['name']
+                size = int(func['size'], 16) if func['size'] != '0' else 0
+                if name not in unique_functions or size > unique_functions[name]['size_int']:
+                    unique_functions[name] = {**func, 'size_int': size}
+            
+            sorted_functions = sorted(unique_functions.values(), 
+                                   key=lambda x: x['size_int'], 
+                                   reverse=True)
+            for i, func in enumerate(sorted_functions[:10], 1):  # 显示前10个
+                size_str = f"({func['size_int']} bytes)" if func['size_int'] > 0 else "(no size)"
+                bind_str = f" [{func['bind']}]" if func['bind'] != 'GLOBAL' else ""
+                print(f"    {i:2d}. {func['name']}{bind_str} {size_str}")
+            
+            if len(unique_functions) > 10:
+                print(f"    ... 还有 {len(unique_functions) - 10} 个导出函数")
+        
+        # 显示主要依赖符号
+        if symbols['undefined_symbols']:
+            print("\n  " + colorize("主要依赖符号:", "1;37"))
+            # 去重未定义符号
+            unique_undefined = {}
+            for sym in symbols['undefined_symbols']:
+                name = sym['name']
+                if name not in unique_undefined:
+                    unique_undefined[name] = sym
+            
+            for i, sym in enumerate(list(unique_undefined.values())[:10], 1):  # 显示前10个
+                type_str = f" ({sym['type']})" if sym['type'] != 'NOTYPE' else ""
+                print(f"    {i:2d}. {sym['name']}{type_str}")
+            
+            if len(unique_undefined) > 10:
+                print(f"    ... 还有 {len(unique_undefined) - 10} 个依赖符号")
+    
+    # 0.4 节信息统计
+    print_subheader("节信息统计")
+    sections = analyze_sections_info(file_path)
+    if 'error' in sections:
+        print_error(f"节信息分析失败: {sections['error']}")
+    else:
+        print_info("总节数", str(sections['total_sections']), "0;36")
+        print_info("总大小", f"{sections['total_size']:,} 字节 ({format_size(sections['total_size'])})", "0;32")
+        print_info("代码节数", str(len(sections['code_sections'])), "0;32")
+        print_info("数据节数", str(len(sections['data_sections'])), "0;32")
+        print_info("其他节数", str(len(sections['other_sections'])), "0;37")
+        
+        # 显示重要节信息
+        important_sections = (sections['code_sections'][:5] + 
+                            sections['data_sections'][:5] + 
+                            sections['other_sections'][:5])
+        important_sections.sort(key=lambda x: x['size'], reverse=True)
+        
+        if important_sections:
+            print("\n  " + colorize("主要节信息 (按大小排序):", "1;37"))
+            headers = ["节名称", "类型", "大小", "描述"]
+            rows = []
+            for sec in important_sections[:10]:  # 显示前10个最大的节
+                rows.append([
+                    sec['name'],
+                    sec['type'],
+                    sec['size_formatted'],
+                    sec['description'][:30] + "..." if len(sec['description']) > 30 else sec['description']
+                ])
+            print_table(headers, rows)
     
     # 1. 16KB页面对齐检查
     print_subheader("16KB页面对齐检查")
@@ -1090,6 +1574,11 @@ def analyze_so_file(file_path):
         print_info("提示", "将命令中的文件名替换为实际的SO文件路径", "1;37")
     
     return {
+        'basic_info': basic_info,
+        'elf_header': elf_header,
+        'dependencies': dependencies,
+        'exported_symbols': symbols,
+        'sections_info': sections,
         '16kb_alignment': alignment_result,
         'hash_style': hash_result,
         'relocation_packing': reloc_result,
