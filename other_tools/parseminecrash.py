@@ -344,13 +344,13 @@ def main():
     parser.add_argument('-l', '--library', help='符号库路径', default='')
     parser.add_argument('-a', '--addr2line', 
                        help='addr2line工具路径',
-                       default='/opt/android-ndk-r25b/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-addr2line')
+                       default='/opt/android-ndk-r27d/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-addr2line')
     parser.add_argument('-t', '--target', help='要解析的目标库名称', default='libmml_framework.so')
     parser.add_argument('-v', '--verbose', help='输出详细信息', action='store_true')
     parser.add_argument('--nm', help='nm工具路径', 
-                   default='/opt/android-ndk-r25b/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-nm')
+                   default='/opt/android-ndk-r27d/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-nm')
     parser.add_argument('--objdump', help='objdump工具路径',
-                    default='/opt/android-ndk-r25b/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-objdump')
+                    default='/opt/android-ndk-r27d/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-objdump')
     parser.add_argument('--analyze-full', action='store_true', 
                         help='使用所有可用工具进行全面分析')
     args = parser.parse_args()
