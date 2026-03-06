@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IP端口检测工具</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+            color: #333;
+        }
+        .container {
+            background-color: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #2c3e50;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        input[type="text"], input[type="number"], select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 16px;
+            box-sizing: border-box;
+        }
+        .port-row {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+        .port-row input {
+            flex: 1;
+        }
+        .port-actions {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 20px;
+        }
+        button {
+            background-color: #3498db;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background-color 0.3s;
+        }
+        button:hover {
+            background-color: #2980b9;
+        }
+        button.secondary {
+            background-color: #95a5a6;
+        }
+        button.secondary:hover {
+            background-color: #7f8c8d;
+        }
+        button.add-port {
+            background-color: #2ecc71;
+        }
+        button.add-port:hover {
+            background-color: #27ae60;
+        }
+        .results {
+            margin-top: 30px;
+        }
+        .result-item {
+            margin-bottom: 10px;
+            padding: 15px;
+            border-radius: 4px;
+            border-left: 4px solid;
+            background-color: #f9f9f9;
+        }
+        .result-item.success {
+            border-color: #2ecc71;
+        }
+        .result-item.error {
+            border-color: #e74c3c;
+        }
+        .result-item.warning {
+            border-color: #f39c12;
+        }
+        .loading {
+            text-align: center;
+            margin: 20px 0;
+            display: none;
+        }
+        .spinner {
+            display: inline-block;
+            width: 30px;
+            height: 30px;
+            border: 3px solid rgba(0,0,0,0.1);
+            border-radius: 50%;
+            border-top-color: #3498db;
+            animation: spin 1s ease-in-out infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .ports-container {
+            max-height: 300px;
+            overflow-y: auto;
+            border: 1px solid #eee;
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+        }
+        .common-ports {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        .common-port-btn {
+            font-size: 12px;
+            padding: 5px 10px;
+            background-color: #f1f1f1;
+            border: 1px solid #ddd;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        .common-port-btn:hover {
+            background-color: #e1e1e1;
+        }
+        .status-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 3px;
+            font-size: 14px;
+            color: white;
+            margin-right: 10px;
+        }
+        .status-open {
+            background-color: #2ecc71;
+        }
+        .status-closed {
+            background-color: #e74c3c;
+        }
+        .status-error {
+            background-color: #f39c12;
+        }
+        .status-warning {
+            background-color: #f39c12;
+        }
+        .timeout-container {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .timeout-container input {
+            width: 80px;
+        }
+        .detection-info {
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-left: 4px solid #3498db;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>IP端口检测工具</h1>
+        
+        <div class="form-group">
+            <label for="ip-address">IP地址 (IPv4 或 IPv6):</label>
+            <input type="text" id="ip-address" placeholder="例如: 192.168.1.1 或 2001:db8::1">
+        </div>
+        
+        <div class="form-group">
+            <label>端口列表:</label>
+            <div class="port-actions">
+                <button class="add-port" onclick="addPort()">添加端口</button>
+                <button class="secondary" onclick="clearPorts()">清空端口</button>
+            </div>
+            <div class="common-ports">
+                <span>常用端口: </span>
+                <button class="common-port-btn" onclick="addCommonPort(22)">SSH (22)</button>
+                <button class="common-port-btn" onclick="addCommonPort(80)">HTTP (80)</button>
+                <button class="common-port-btn" onclick="addCommonPort(443)">HTTPS (443)</button>
+                <button class="common-port-btn" onclick="addCommonPort(21)">FTP (21)</button>
+                <button class="common-port-btn" onclick="addCommonPort(3389)">RDP (3389)</button>
+                <button class="common-port-btn" onclick="addCommonPort(3306)">MySQL (3306)</button>
+                <button class="common-port-btn" onclick="addCommonPort(5432)">PostgreSQL (5432)</button>
+                <button class="common-port-btn" onclick="addCommonPort(27017)">MongoDB (27017)</button>
+            </div>
+            <div class="ports-container" id="ports-container"></div>
+        </div>
+        
+        <div class="form-group timeout-container">
+            <label for="timeout">超时时间 (毫秒):</label>
+            <input type="number" id="timeout" value="2000" min="100" max="10000">
+        </div>
+        
+        <button id="check-btn" onclick="checkPorts()">检测端口</button>
+        
+        <div class="loading" id="loading">
+            <div class="spinner"></div>
+            <p>正在检测端口，请稍候...</p>
+        </div>
+        
+        <div class="detection-info">
+            <strong>检测原理说明：</strong>
+            <p>此工具使用多种方法检测端口状态：</p>
+            <ol>
+                <li>尝试加载目标端口的图像资源</li>
+                <li>使用Fetch API发送无跨域限制的请求</li>
+                <li>尝试建立WebSocket连接</li>
+            </ol>
+            <p>检测结果解释：</p>
+            <ul>
+                <li><span class="status-badge status-open">开放</span> - 端口接受连接，服务可访问</li>
+                <li><span class="status-badge status-warning">可能开放</span> - 端口有响应但可能不接受标准HTTP/WS连接</li>
+                <li><span class="status-badge status-closed">关闭</span> - 端口不接受连接或防火墙阻止</li>
+            </ul>
+            <p>注意：由于浏览器安全限制，此工具主要适用于HTTP、HTTPS和WebSocket服务检测。</p>
+        </div>
+        
+        <div class="results" id="results"></div>
+    </div>
+
+    <script>
+        // 存储端口列表
+        let ports = [];
+        
+        // 添加一个新的端口输入
+        function addPort(portValue = '') {
+            const portId = Date.now(); // 生成唯一ID
+            ports.push(portId);
+            
+            const container = document.getElementById('ports-container');
+            const portRow = document.createElement('div');
+            portRow.className = 'port-row';
+            portRow.id = `port-row-${portId}`;
+            
+            portRow.innerHTML = `
+                <input type="number" id="port-${portId}" placeholder="输入端口号" value="${portValue}" min="1" max="65535">
+                <button class="secondary" onclick="removePort(${portId})">删除</button>
+            `;
+            
+            container.appendChild(portRow);
+        }
+        
+        // 删除一个端口输入
+        function removePort(portId) {
+            const index = ports.indexOf(portId);
+            if (index > -1) {
+                ports.splice(index, 1);
+            }
+            
+            const portRow = document.getElementById(`port-row-${portId}`);
+            if (portRow) {
+                portRow.remove();
+            }
+        }
+        
+        // 清空所有端口
+        function clearPorts() {
+            const container = document.getElementById('ports-container');
+            container.innerHTML = '';
+            ports = [];
+        }
+        
+        // 添加常用端口
+        function addCommonPort(port) {
+            addPort(port);
+        }
+        
+        // 检测端口是否开放
+        async function checkPort(ip, port, timeout) {
+            return new Promise((resolve) => {
+                const img = new Image();
+                const protocol = port === 443 ? 'https' : 'http';
+                const startTime = Date.now();
+                
+                // 设置超时
+                const timeoutId = setTimeout(() => {
+                    img.onload = img.onerror = null;
+                    resolve({ port, status: 'closed', message: `端口 ${port} 关闭或超时` });
+                }, timeout);
+                
+                img.onload = function() {
+                    clearTimeout(timeoutId);
+                    const elapsedTime = Date.now() - startTime;
+                    resolve({ port, status: 'open', message: `端口 ${port} 开放 (${elapsedTime}ms)` });
+                };
+                
+                img.onerror = function() {
+                    clearTimeout(timeoutId);
+                    
+                    // 对于错误，我们需要更精确的判断
+                    // 使用fetch API进行第二次确认检测
+                    fetch(`${protocol}://${ip}:${port}/`, { 
+                        mode: 'no-cors', // 允许跨域请求
+                        method: 'HEAD',  // 只请求头部信息，更高效
+                        cache: 'no-cache',
+                        timeout: timeout // 设置超时
+                    })
+                    .then(() => {
+                        // fetch成功完成（无论返回什么状态码）表示端口可访问
+                        const elapsedTime = Date.now() - startTime;
+                        resolve({ port, status: 'open', message: `端口 ${port} 开放 (${elapsedTime}ms)` });
+                    })
+                    .catch(() => {
+                        // 对于错误，尝试使用WebSocket再次确认
+                        try {
+                            const ws = new WebSocket(`${port === 443 ? 'wss' : 'ws'}://${ip}:${port}/`);
+                            
+                            // 设置超时
+                            const wsTimeout = setTimeout(() => {
+                                if (ws.readyState !== WebSocket.OPEN && ws.readyState !== WebSocket.CONNECTING) {
+                                    ws.close();
+                                    resolve({ port, status: 'closed', message: `端口 ${port} 关闭 (WebSocket测试)` });
+                                }
+                            }, timeout / 2);
+                            
+                            ws.onopen = function() {
+                                clearTimeout(wsTimeout);
+                                ws.close();
+                                const elapsedTime = Date.now() - startTime;
+                                resolve({ port, status: 'open', message: `端口 ${port} 开放 (WebSocket连接成功, ${elapsedTime}ms)` });
+                            };
+                            
+                            ws.onerror = function() {
+                                clearTimeout(wsTimeout);
+                                // 即使WebSocket错误，也要根据连接时间来判断
+                                const elapsedTime = Date.now() - startTime;
+                                if (elapsedTime < timeout / 2) {
+                                                    // 快速响应意味着有服务在监听（可能不是WebSocket）
+                                    resolve({ port, status: 'warning', message: `端口 ${port} 可能开放 (快速响应, ${elapsedTime}ms)` });
+                                } else {
+                                    resolve({ port, status: 'closed', message: `端口 ${port} 关闭或未响应 (${elapsedTime}ms)` });
+                                }
+                            };
+                        } catch(e) {
+                            // WebSocket构造失败
+                            resolve({ port, status: 'closed', message: `端口 ${port} 关闭 (连接尝试失败)` });
+                        }
+                    });
+                };
+                
+                // 尝试加载目标地址的图像
+                const src = `${protocol}://${encodeURIComponent(ip)}:${port}/favicon.ico?t=${Date.now()}`;
+                img.src = src;
+            });
+        }
+        
+        // 检测所有端口
+        async function checkPorts() {
+            const ipAddress = document.getElementById('ip-address').value.trim();
+            const timeout = parseInt(document.getElementById('timeout').value, 10);
+            const resultsContainer = document.getElementById('results');
+            const loading = document.getElementById('loading');
+            
+            // 验证输入
+            if (!ipAddress) {
+                alert('请输入IP地址');
+                return;
+            }
+            
+            if (ports.length === 0) {
+                alert('请添加至少一个端口');
+                return;
+            }
+            
+            // 收集所有端口值
+            const portValues = [];
+            for (const portId of ports) {
+                const portInput = document.getElementById(`port-${portId}`);
+                if (portInput && portInput.value) {
+                    const portValue = parseInt(portInput.value, 10);
+                    if (portValue > 0 && portValue <= 65535) {
+                        portValues.push(portValue);
+                    }
+                }
+            }
+            
+            if (portValues.length === 0) {
+                alert('没有有效的端口号');
+                return;
+            }
+            
+            // 清空结果并显示加载指示器
+            resultsContainer.innerHTML = '';
+            loading.style.display = 'block';
+            
+            // 禁用检测按钮
+            document.getElementById('check-btn').disabled = true;
+            
+            try {
+                // 添加检测信息标题
+                resultsContainer.innerHTML = `
+                    <h2>检测结果 - ${ipAddress}</h2>
+                    <p>检测时间: ${new Date().toLocaleString()}</p>
+                `;
+                
+                // 并行检测所有端口
+                const results = await Promise.all(
+                    portValues.map(port => checkPort(ipAddress, port, timeout))
+                );
+                
+                // 显示结果
+                results.forEach(result => {
+                    const resultItem = document.createElement('div');
+                    let resultClass;
+                    if (result.status === 'open') {
+                        resultClass = 'success';
+                    } else if (result.status === 'warning') {
+                        resultClass = 'warning';  // 可能需要添加CSS样式
+                    } else {
+                        resultClass = 'error';
+                    }
+                    resultItem.className = `result-item ${resultClass}`;
+                    
+                    let statusClass, statusText;
+                    if (result.status === 'open') {
+                        statusClass = 'status-open';
+                        statusText = '开放';
+                    } else if (result.status === 'warning') {
+                        statusClass = 'status-warning';
+                        statusText = '可能开放';
+                    } else {
+                        statusClass = 'status-closed';
+                        statusText = '关闭';
+                    }
+                    
+                    resultItem.innerHTML = `
+                        <span class="status-badge ${statusClass}">${statusText}</span>
+                        <strong>端口 ${result.port}:</strong> ${result.message}
+                    `;
+                    
+                    resultsContainer.appendChild(resultItem);
+                });
+                
+            } catch (error) {
+                resultsContainer.innerHTML += `
+                    <div class="result-item error">
+                        <strong>错误:</strong> ${error.message || '检测过程中发生错误'}
+                    </div>
+                `;
+            } finally {
+                // 隐藏加载指示器并重新启用按钮
+                loading.style.display = 'none';
+                document.getElementById('check-btn').disabled = false;
+            }
+        }
+        
+        // 初始化页面
+        document.addEventListener('DOMContentLoaded', function() {
+            // 添加初始的端口输入框
+            addPort();
+        });
+    </script>
+</body>
+</html>

@@ -1,88 +1,24 @@
 # WUKONG_TOOLS
 
-## Tools for my daily work. Powerful as Wukong.
+日常开发和系统维护用的小工具集合，按功能分目录整理。
 
-This repository contains a collection of utility scripts designed to help with various tasks. The tools are organized into categorized directories with links to their detailed documentation.
+## 快速导航
 
-## Table of Contents
+- [Android Tools](android_tools/README.md) - Android SO/ELF 分析与验证
+- [File Management](file_management/README.md) - 文件整理、重复文件分析、构建目录清理
+- [Git Tools](git_tools/README.md) - Git patch 导出、历史作者信息处理等
+- [Media Tools](media_tools/README.md) - 图片转换、Markdown 图片收集、元数据处理
+- [Net Tools](net_tools/README.md) - 网络与端口检测工具
+- [System Utilities](system_utilities/README.md) - 系统维护与环境相关脚本
+- [Other Tools](other_tools/README.md) - 其他杂项工具
+- [kindle-wallpaper-tool](kindle-wallpaper-tool/README.md) - Kindle 壁纸相关独立工具
 
-### [File Management](file_management/)
-- [Duplicate Finder](file_management/duplicate_finder_readme.md) - Find and remove duplicate files
-- [Duplicate File Analyzer](file_management/duplicate_file_analyzer.md) - Analyze duplicate files without removing them
-- [Organize Files](file_management/organize_files_readme.md) - Organize files by type or other criteria
-- [Clean Build Directories](file_management/clean_build_readme.md) - Move build directories to trash
-- [Clean Build Directories (Python)](file_management/clean_build_py_readme.md) - Python version of build directory cleaner
-- [Mac Cleaner](file_management/mac_cleaner.md) - Clean up temporary and cache files on macOS
+## 目录组织约定
 
-### [Git Tools](git_tools/)
-- [Export Git Commits to Patches](git_tools/export_commits_to_patches_readme.md) - Export git commits as patch files
-- [Batch Modify Git Commits](git_tools/batch_modify_git_commits.md) - Modify author information in git history
-
-### [Media Tools](media_tools/)
-- [AVIF to PNG Converter](media_tools/avif_to_png_converter.md) - Convert AVIF images to PNG format
-- [Collect Markdown Images](#collect-markdown-images) - Extract images from markdown files
-- [Apple Music Player](#apple-music-player) - Play music from Apple Music library
-
-### [System Utilities](system_utilities/)
-- [Update Zsh Plugin](system_utilities/update_zsh_plugin.md) - Update Zsh plugins
-
-### [Other Tools](other_tools/)
-- [Parse Me Crash](other_tools/parse_me_crash.md) - Parse crash logs from Minecraft
-
-## File Management Tools
-
-Find and remove duplicate files to save storage space, organize files, and clean build directories.
-
-[Detailed documentation for all file management tools](file_management/)
-
----
-
-## Git Tools
-
-Tools for working with Git repositories, including exporting commits as patches and modifying commit history.
-
-[Detailed documentation for all Git tools](git_tools/)
-
----
-
-## System Utilities
-
-Utilities for system maintenance and management.
-
-[Detailed documentation for all system utilities](system_utilities/)
-
----
-
-## Media Tools
-
-Tools for handling media files and extraction.
-
-[Detailed documentation for all media tools](media_tools/)
-
-### Collect Markdown Images
-
-Extract images from markdown files.
-
-```bash
-python collect_md.py demo.md -o md_images -d /Users/xiebaiyuan/Documents/md_collects/
-```
-
-### Apple Music Player
-
-Play music from Apple Music library.
-
-```bash
-python apple_music_player.py
-```
-
-## Other Utilities
-
-Specialized tools for specific tasks.
-
-[Detailed documentation for other tools](other_tools/)
-
----
+- 各目录使用 `README.md` 作为入口说明。
+- 单工具说明文档尽量保留在工具所在目录。
+- 根目录仅保留总索引和少量公共文件。
 
 ## Disclaimer
 
-These scripts are untested and provided "as is" without any warranties or guarantees of any kind. Use them at your own risk. The author assumes no responsibility for any errors, omissions, or damages resulting from the use of these scripts. Please exercise caution and thoroughly test the scripts in a safe environment before deploying them in a production setting.
+These scripts are provided "as is" without any warranties or guarantees. Use them at your own risk. Please test in a safe environment before using in production.
