@@ -8,11 +8,13 @@ System maintenance and environment helper scripts.
 - `collect_ip.sh` - Collect local/network IP information.
 - `batch_file_md5.sh` - Batch-calculate MD5 for files in a directory (general-purpose).
 - `current_dir_so_md5.sh` - Legacy helper for hashing files in a directory.
+- `env_doctor.py` - Check common tooling availability and versions.
 
 ## Docs
 
 - `update_zsh_plugin.md`
 - `batch_file_md5.md`
+- `env_doctor.md`
 
 ## Quick Start
 

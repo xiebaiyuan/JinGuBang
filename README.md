@@ -36,6 +36,7 @@ open README.md
 - 目录: `file_management/`
 - 入口: `file_management/README.md`
 - 适用场景: 重复文件分析、文件整理、构建目录清理
+  - 新增: `log_summary.py` 日志聚合与摘要
 
 ### 3) Git Tools
 
@@ -60,6 +61,7 @@ open README.md
 - 目录: `system_utilities/`
 - 入口: `system_utilities/README.md`
 - 适用场景: 本机环境维护、批量文件哈希计算
+  - 新增: `env_doctor.py` 环境依赖检测
 
 ### 7) Other Tools
 
