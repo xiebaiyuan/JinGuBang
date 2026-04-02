@@ -11,12 +11,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | Directory | Purpose |
 |---|---|
 | `android_tools/` | Android SO/ELF 二进制分析（文件头、符号、依赖、NDK 检测、16KB 页对齐） |
-| `file_management/` | 重复文件检测、构建目录清理、macOS 缓存清理、Docker 清理 |
+| `dev_tools/` | 开发辅助：TODO/FIXME 收集、代码行数统计 |
+| `file_management/` | 重复文件检测、构建目录清理、macOS 缓存清理、Docker 清理、目录树可视化 |
 | `git_tools/` | Patch 导出、commit 批量修改、Fork 同步、GitHub token 清理 |
 | `media_tools/` | AVIF→PNG 转换、EXIF 编辑、Markdown 资源收集、Kindle 图像适配 |
-| `net_tools/` | 端口连通性检查（浏览器端 HTML 工具） |
-| `system_utilities/` | 批量文件 MD5 计算、IP 信息收集、Zsh 插件更新 |
-| `other_tools/` | Minecraft 崩溃日志解析、Apple Music 助手 |
+| `net_tools/` | 端口扫描、DNS 报告、SSL 证书检查、HTTP 健康检测 |
+| `system_utilities/` | 批量文件 MD5 计算、IP 信息收集、Zsh 插件更新、监听端口查看、Crontab 备份 |
+| `other_tools/` | Minecraft 崩溃日志解析、JSON/YAML 转换、文本编解码、CSV 统计 |
 | `kindle-wallpaper-tool/` | 独立子项目，含自己的 `requirements.txt`（Pillow），支持 20+ Kindle 型号 |
 
 根目录额外包含：
@@ -58,6 +59,36 @@ python3 media_tools/avif_to_png_converter.py /path/to/avif -o /path/to/output -r
 
 # Claude CLI API 主机替换（用于代理）
 API_HOST=your-proxy-host ./fix_any2.sh
+
+# SSL 证书检查
+python3 net_tools/ssl_cert_check.py example.com github.com
+
+# HTTP 健康检测
+python3 net_tools/http_health_check.py https://example.com https://api.example.com
+
+# TODO/FIXME 收集
+python3 dev_tools/todo_collector.py <directory> -g tag
+
+# 代码行数统计
+python3 dev_tools/loc_counter.py <directory> --top 10
+
+# 文本编解码
+python3 other_tools/text_convert.py b64enc "hello"
+python3 other_tools/text_convert.py ts2date 1700000000
+echo "encoded" | python3 other_tools/text_convert.py b64dec
+
+# CSV 快速统计
+python3 other_tools/csv_quick_stats.py data.csv
+
+# 目录树可视化
+python3 file_management/tree_view.py <directory> -d 3 -s
+
+# 查看监听端口
+python3 system_utilities/listening_ports.py -p 8080
+
+# Crontab 备份与恢复
+./system_utilities/crontab_backup.sh backup
+./system_utilities/crontab_backup.sh list
 ```
 
 ## Testing
@@ -79,7 +110,7 @@ API_HOST=your-proxy-host ./fix_any2.sh
 
 **系统命令依赖（按目录）：**
 - `android_tools/`: `readelf`/`llvm-readelf`, `objdump`/`llvm-objdump`, `strings`, `file`
-- `system_utilities/`: `md5sum`（Linux）或 `md5`/`openssl dgst -md5`（macOS）
+- `system_utilities/`: `md5sum`（Linux）或 `md5`/`openssl dgst -md5`（macOS），`lsof`（macOS）或 `ss`（Linux）
 - `git_tools/`: `git`（含 `filter-branch` 支持）
 - `file_management/`: `trash`（可选，macOS）, `docker`（可选）, `brew`（可选）
 

@@ -7,6 +7,7 @@
 - 全局索引：`TOOLS_INDEX.md`
 - 贡献规范：`docs/CONTRIBUTING_TOOLS.md`
 - Android：`android_tools/README.md`
+- 开发辅助：`dev_tools/README.md`
 - 文件管理：`file_management/README.md`
 - Git：`git_tools/README.md`
 - 媒体处理：`media_tools/README.md`
@@ -29,6 +30,16 @@ python3 net_tools/domain_dns_report.py -d example.com
 
 # 查看系统环境依赖
 python3 system_utilities/env_doctor.py
+
+# 检查 SSL 证书
+python3 net_tools/ssl_cert_check.py example.com
+
+# 统计代码行数
+python3 dev_tools/loc_counter.py . --top 10
+
+# Base64/时间戳转换
+python3 other_tools/text_convert.py b64enc "hello"
+python3 other_tools/text_convert.py ts2date 1700000000
 ```
 
 ## 维护原则

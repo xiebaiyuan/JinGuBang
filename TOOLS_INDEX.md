@@ -5,6 +5,7 @@
 ## 按分类
 
 - Android: `android_tools/README.md`
+- 开发辅助: `dev_tools/README.md`
 - 文件管理: `file_management/README.md`
 - Git: `git_tools/README.md`
 - 媒体处理: `media_tools/README.md`
@@ -31,10 +32,19 @@
 - 磁盘占用快照: `system_utilities/disk_usage_snapshot.sh`
 - 进程排行: `system_utilities/process_top_watch.py`
 - JSON/YAML 转换: `other_tools/json_yaml_convert.py`
+- SSL 证书检查: `net_tools/ssl_cert_check.py`
+- HTTP 健康检测: `net_tools/http_health_check.py`
+- TODO/FIXME 收集: `dev_tools/todo_collector.py`
+- 代码行数统计: `dev_tools/loc_counter.py`
+- 监听端口查看: `system_utilities/listening_ports.py`
+- Crontab 备份恢复: `system_utilities/crontab_backup.sh`
+- 文本编解码/时间戳: `other_tools/text_convert.py`
+- CSV 快速统计: `other_tools/csv_quick_stats.py`
+- 目录树可视化: `file_management/tree_view.py`
 
 ## 按语言
 
-- Python: `android_tools/*.py`, `file_management/*.py`, `git_tools/*.py`, `media_tools/*.py`, `net_tools/*.py`, `system_utilities/*.py`, `other_tools/*.py`
+- Python: `android_tools/*.py`, `dev_tools/*.py`, `file_management/*.py`, `git_tools/*.py`, `media_tools/*.py`, `net_tools/*.py`, `system_utilities/*.py`, `other_tools/*.py`
 - Shell: `file_management/*.sh`, `git_tools/*.sh`, `system_utilities/*.sh`, `media_tools/*.sh`
 - HTML: `net_tools/port_checker.html`
 
@@ -58,6 +68,36 @@ python3 net_tools/domain_dns_report.py -d example.com --types A,AAAA,MX
 
 # 生成 APK native 库报告
 python3 android_tools/apk_native_libs_report.py -i app.apk --format text
+
+# 检查 SSL 证书到期
+python3 net_tools/ssl_cert_check.py example.com github.com
+
+# 批量检查服务健康
+python3 net_tools/http_health_check.py https://example.com https://github.com
+
+# 收集代码中的 TODO
+python3 dev_tools/todo_collector.py . -g tag
+
+# 统计代码行数
+python3 dev_tools/loc_counter.py . --top 10
+
+# Base64 编码
+python3 other_tools/text_convert.py b64enc "hello world"
+
+# 时间戳转日期
+python3 other_tools/text_convert.py ts2date 1700000000
+
+# 查看 CSV 文件统计
+python3 other_tools/csv_quick_stats.py data.csv
+
+# 可视化目录树
+python3 file_management/tree_view.py . -d 3 -s
+
+# 查看监听端口
+python3 system_utilities/listening_ports.py
+
+# 备份 crontab
+bash system_utilities/crontab_backup.sh backup
 ```
 
 ## 验证记录

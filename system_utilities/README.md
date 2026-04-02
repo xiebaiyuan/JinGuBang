@@ -11,12 +11,16 @@
 | `collect_ip.sh` | 收集本机网络 IP 信息 | `bash system_utilities/collect_ip.sh` | 系统网络命令 | macOS/Linux | 低 |
 | `update_zsh_plugin.sh` | 更新 zsh 插件 | `bash system_utilities/update_zsh_plugin.sh` | zsh 生态命令 | macOS/Linux | 中 |
 | `current_dir_so_md5.sh` | 历史 so 文件哈希辅助脚本 | `bash system_utilities/current_dir_so_md5.sh` | `md5/md5sum` | macOS/Linux | 低 |
+| `listening_ports.py` | 查看系统监听端口与对应进程 | `python3 system_utilities/listening_ports.py` | `lsof`(macOS)/`ss`(Linux) | macOS/Linux | 低 |
+| `crontab_backup.sh` | 备份/恢复/对比用户 crontab | `bash system_utilities/crontab_backup.sh backup` | Shell | macOS/Linux | 低 |
 
 ## 何时使用
 
 - 空间排查用 `disk_usage_snapshot.sh`。
 - 排查高占用进程用 `process_top_watch.py`。
 - CI/发版前做环境基线用 `env_doctor.py`。
+- 查看谁占用了端口用 `listening_ports.py`。
+- 定时任务变更前用 `crontab_backup.sh backup` 备份。
 
 ## 相关文档
 

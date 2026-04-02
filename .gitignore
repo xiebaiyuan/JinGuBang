@@ -33,3 +33,8 @@
 md_images
 
 .DS_Store
+.worktrees/
+superpowers
+kindle_converter_env/
+__pycache__/
+.ruff_cache/

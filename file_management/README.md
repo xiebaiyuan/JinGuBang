@@ -15,6 +15,7 @@
 | `move_build_dirs_trash.py` | 构建目录清理（Python 版） | `python3 file_management/move_build_dirs_trash.py --help` | Python 标准库 | 跨平台 | 中 |
 | `mac_cleaner.sh` | 清理 macOS 缓存与临时文件 | `bash file_management/mac_cleaner.sh --dry-run` | macOS 命令 | macOS | 中 |
 | `clean_docker.sh` | 清理 Docker 资源 | `bash file_management/clean_docker.sh` | Docker | macOS/Linux | 高 |
+| `tree_view.py` | 目录树可视化，带文件大小统计 | `python3 file_management/tree_view.py . -d 3 -s` | Python 标准库 | 跨平台 | 低 |
 
 ## 旧名与推荐名
 
